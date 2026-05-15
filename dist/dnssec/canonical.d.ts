@@ -1,0 +1,21 @@
+import { Buffer } from "node:buffer";
+import type { Answer, CaaData, DnskeyData, DsData, RrsigData, SoaData, TlsaData } from "dns-packet";
+export declare function typeNumber(name: string): number;
+export declare function encodeName(name: string): Buffer;
+export declare function encodeIPv4(addr: string): Buffer;
+export declare function encodeIPv6(addr: string): Buffer;
+export declare function encodeDnskeyRdata(d: DnskeyData): Buffer;
+export declare function encodeDsRdata(d: DsData): Buffer;
+export declare function encodeTlsaRdata(d: TlsaData): Buffer;
+export declare function encodeCaaRdata(d: CaaData): Buffer;
+export declare function encodeSoaRdata(d: SoaData): Buffer;
+export declare function encodeRrsigRdataForSigning(r: RrsigData): Buffer;
+export declare function encodeRdata(answer: Answer): Buffer;
+export declare function encodeRrForSigning(rrset: Answer[], rrsig: RrsigData): Buffer;
+export declare function rrsigSigningInput(rrsig: RrsigData, rrset: Answer[]): Buffer;
+export declare function computeKeyTag(dnskey: DnskeyData): number;
+export declare function computeDsDigest(
+  ownerName: string,
+  dnskey: DnskeyData,
+  digestType: number,
+): Buffer;
