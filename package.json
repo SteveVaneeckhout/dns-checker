@@ -1,6 +1,6 @@
 {
   "name": "dns-checker",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "A Node.js library that runs DNS-related health checks against a website's hostname",
   "repository": "https://github.com/SteveVaneeckhout/dns-checker",
   "files": [
@@ -31,9 +31,9 @@
   },
   "devDependencies": {
     "@types/dns-packet": "^5.6.5",
-    "@types/node": "^24.12.2",
+    "@types/node": "^24.12.4",
     "@vitest/coverage-v8": "^4.1.6",
-    "oxfmt": "^0.49.0",
+    "oxfmt": "^0.50.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.6"
   },

@@ -46,7 +46,7 @@ interface CheckResult {
   durationMs: number;
   ip: IpResult; // A/AAAA presence + TLS reachability
   nameservers: NameserverResult; // NS dual-stack reachability
-  sameness: SamenessResult; // SHA-256 of body via v4 vs v6
+  sameness: SamenessResult; // v4 vs v6 body similarity (200s) or hash equality (non-200s)
   dnssec: DnssecResult; // signed + chain validity + chain steps
   caa: CaaResult; // records + cert issuer match
   dane: DaneResult; // TLSA + cert match
@@ -73,7 +73,7 @@ interface CheckOptions {
   url?: string; // default: `https://${hostname}/`
   timeoutMs?: number; // per-query / per-socket timeout, default 5000
   resolver?: string; // recursive resolver IP, default "1.1.1.1"
-  bodyHashLimit?: number; // cap response body bytes hashed, default 1 MiB
+  bodyHashLimit?: number; // cap response body bytes read for hashing/similarity, default 1 MiB
   trustAnchors?: readonly RootTrustAnchorRef[]; // override IANA roots (testing)
 }
 ```
@@ -96,14 +96,33 @@ await checkDomain("example.com", undefined, transports);
 
 ## What each check actually does
 
-| Check       | Wire calls                                                                               |
-| ----------- | ---------------------------------------------------------------------------------------- |
-| ip          | Resolve A + AAAA, then TLS handshake to each on port 443 to confirm reachability.        |
-| nameservers | Resolve NS for the apex, then SOA-probe each NS on UDP/53 over both v4 and v6.           |
-| sameness    | Open TLS to first v4 and first v6 IP, send HTTP/1.1 GET, hash the body with SHA-256.     |
-| dnssec      | Walk root → … → apex with the DO bit set, verify every RRSIG locally with `node:crypto`. |
-| caa         | Tree-walk CAA per RFC 8659, fetch the leaf cert, match issuer against the CAA tag.       |
-| dane        | Query TLSA at `_443._tcp.<host>`, verify with DNSSEC, match against the served cert.     |
+| Check       | Wire calls                                                                                                                                                                                    |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ip          | Resolve A + AAAA, then TLS handshake to each on port 443 to confirm reachability.                                                                                                             |
+| nameservers | Resolve NS for the apex, then SOA-probe each NS on UDP/53 over both v4 and v6.                                                                                                                |
+| sameness    | Open TLS to first v4 and first v6 IP, send HTTP/1.1 GET; for 200s compare bodies with a Jaccard byte-shingle similarity, for other responses compare a SHA-256 of `status + Location + body`. |
+| dnssec      | Walk root → … → apex with the DO bit set, verify every RRSIG locally with `node:crypto`.                                                                                                      |
+| caa         | Tree-walk CAA per RFC 8659, fetch the leaf cert, match issuer against the CAA tag.                                                                                                            |
+| dane        | Query TLSA at `_443._tcp.<host>`, verify with DNSSEC, match against the served cert.                                                                                                          |
+
+### Sameness
+
+The sameness check compares what the IPv4 and IPv6 endpoints serve at the same
+URL. Behavior depends on the HTTP status code of the two responses:
+
+- **Both responses are 200**: the bodies are compared with a Jaccard similarity
+  over rolling 8-byte shingles. The result is exposed as `similarity` in the
+  `[0, 1]` range (1 = identical, 0 = no overlap). `ipv4Hash` / `ipv6Hash` are
+  not set, and `match` is `false` — the library deliberately does not pick a
+  pass/fail threshold; callers decide what counts as "the same enough".
+- **Anything else** (redirects, errors, mixed status codes): each side is
+  fingerprinted with `SHA-256(status + "\n" + Location + "\n" + body)`. The
+  hashes are exposed as `ipv4Hash` / `ipv6Hash`; `match` is `true` when they
+  are equal.
+
+`ok` means the check ran without errors (DNS + both fetches succeeded). It does
+**not** imply the responses matched — read `similarity` (200 case) or `match`
+(non-200 case) for that.
 
 ### DNSSEC
 

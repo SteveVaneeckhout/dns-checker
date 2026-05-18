@@ -54,6 +54,7 @@ export interface SamenessResult {
   ipv6Address?: string;
   ipv4Hash?: string;
   ipv6Hash?: string;
+  similarity?: number;
   match: boolean;
 }
 

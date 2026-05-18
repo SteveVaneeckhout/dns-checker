@@ -14,8 +14,4 @@ export declare function encodeRdata(answer: Answer): Buffer;
 export declare function encodeRrForSigning(rrset: Answer[], rrsig: RrsigData): Buffer;
 export declare function rrsigSigningInput(rrsig: RrsigData, rrset: Answer[]): Buffer;
 export declare function computeKeyTag(dnskey: DnskeyData): number;
-export declare function computeDsDigest(
-  ownerName: string,
-  dnskey: DnskeyData,
-  digestType: number,
-): Buffer;
+export declare function computeDsDigest(ownerName: string, dnskey: DnskeyData, digestType: number): Buffer;

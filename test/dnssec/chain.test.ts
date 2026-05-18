@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { Answer } from "dns-packet";
 import type { DnsTransport } from "../../src/net/dns.ts";
 import { validateChain, verifyRecord } from "../../src/dnssec/chain.ts";
 import {
@@ -233,6 +234,119 @@ describe("validateChain", () => {
     };
     const result = await validateChain("example.tld", transport, [anchor]);
     expect(result.errors.join(" ")).toMatch(/RRSIG invalid/);
+  });
+
+  it("reports signed=false when queried name CNAMEs into an unsigned zone", async () => {
+    const root = makeZone(".");
+    const tld = makeZone("tld");
+    const parent = makeZone("parent.tld");
+    const anchor = makeTrustAnchorFor(root);
+    const dsTld = makeDsForChild(root, "tld", tld);
+    const dsParent = makeDsForChild(tld, "parent.tld", parent);
+
+    const cnameRrset: Answer[] = [
+      { name: "host.parent.tld", type: "CNAME", data: "target.other-tld" },
+    ];
+    const cnameSig = signRrset(cnameRrset, "CNAME", parent, "host.parent.tld");
+
+    const transport: DnsTransport = {
+      async query({ type, name }) {
+        if (type === "DNSKEY" && name === ".")
+          return buildPacket(root.dnskeyAnswers, [root.dnskeySig]);
+        if (type === "DNSKEY" && name === "tld")
+          return buildPacket(tld.dnskeyAnswers, [tld.dnskeySig]);
+        if (type === "DNSKEY" && name === "parent.tld")
+          return buildPacket(parent.dnskeyAnswers, [parent.dnskeySig]);
+        if (type === "DS" && name === "tld") return buildPacket(dsTld.records, [dsTld.rrsig]);
+        if (type === "DS" && name === "parent.tld")
+          return buildPacket(dsParent.records, [dsParent.rrsig]);
+        if (type === "A" && name === "host.parent.tld") return buildPacket(cnameRrset, [cnameSig]);
+        return buildPacket([], []);
+      },
+    };
+
+    const result = await validateChain("host.parent.tld", transport, [anchor]);
+    expect(result.signed).toBe(false);
+    expect(result.chainValid).toBe(false);
+    expect(result.chain.map((c) => c.zone)).toEqual([".", "tld", "parent.tld"]);
+    expect(result.errors.join(" ")).toMatch(/target is insecure/);
+  });
+
+  it("reports signed=true when queried name has a signed CNAME to a signed target", async () => {
+    const root = makeZone(".");
+    const tld = makeZone("tld");
+    const parent = makeZone("parent.tld");
+    const otherTld = makeZone("other-tld");
+    const anchor = makeTrustAnchorFor(root);
+    const dsTld = makeDsForChild(root, "tld", tld);
+    const dsParent = makeDsForChild(tld, "parent.tld", parent);
+    const dsOther = makeDsForChild(root, "other-tld", otherTld);
+
+    const cnameRrset: Answer[] = [
+      { name: "host.parent.tld", type: "CNAME", data: "target.other-tld" },
+    ];
+    const cnameSig = signRrset(cnameRrset, "CNAME", parent, "host.parent.tld");
+    const targetA: Answer[] = [{ name: "target.other-tld", type: "A", data: "192.0.2.5" }];
+    const targetSig = signRrset(targetA, "A", otherTld, "target.other-tld");
+
+    const transport: DnsTransport = {
+      async query({ type, name }) {
+        if (type === "DNSKEY" && name === ".")
+          return buildPacket(root.dnskeyAnswers, [root.dnskeySig]);
+        if (type === "DNSKEY" && name === "tld")
+          return buildPacket(tld.dnskeyAnswers, [tld.dnskeySig]);
+        if (type === "DNSKEY" && name === "parent.tld")
+          return buildPacket(parent.dnskeyAnswers, [parent.dnskeySig]);
+        if (type === "DNSKEY" && name === "other-tld")
+          return buildPacket(otherTld.dnskeyAnswers, [otherTld.dnskeySig]);
+        if (type === "DS" && name === "tld") return buildPacket(dsTld.records, [dsTld.rrsig]);
+        if (type === "DS" && name === "parent.tld")
+          return buildPacket(dsParent.records, [dsParent.rrsig]);
+        if (type === "DS" && name === "other-tld")
+          return buildPacket(dsOther.records, [dsOther.rrsig]);
+        if (type === "A" && name === "host.parent.tld") return buildPacket(cnameRrset, [cnameSig]);
+        if (type === "A" && name === "target.other-tld") return buildPacket(targetA, [targetSig]);
+        return buildPacket([], []);
+      },
+    };
+
+    const result = await validateChain("host.parent.tld", transport, [anchor]);
+    expect(result.signed).toBe(true);
+    expect(result.chainValid).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it("reports signed=false when the queried name's CNAME RRset is unsigned", async () => {
+    const root = makeZone(".");
+    const tld = makeZone("tld");
+    const parent = makeZone("parent.tld");
+    const anchor = makeTrustAnchorFor(root);
+    const dsTld = makeDsForChild(root, "tld", tld);
+    const dsParent = makeDsForChild(tld, "parent.tld", parent);
+
+    const cnameRrset: Answer[] = [
+      { name: "host.parent.tld", type: "CNAME", data: "target.example" },
+    ];
+
+    const transport: DnsTransport = {
+      async query({ type, name }) {
+        if (type === "DNSKEY" && name === ".")
+          return buildPacket(root.dnskeyAnswers, [root.dnskeySig]);
+        if (type === "DNSKEY" && name === "tld")
+          return buildPacket(tld.dnskeyAnswers, [tld.dnskeySig]);
+        if (type === "DNSKEY" && name === "parent.tld")
+          return buildPacket(parent.dnskeyAnswers, [parent.dnskeySig]);
+        if (type === "DS" && name === "tld") return buildPacket(dsTld.records, [dsTld.rrsig]);
+        if (type === "DS" && name === "parent.tld")
+          return buildPacket(dsParent.records, [dsParent.rrsig]);
+        if (type === "A" && name === "host.parent.tld") return buildPacket(cnameRrset, []); // no RRSIG on the CNAME
+        return buildPacket([], []);
+      },
+    };
+
+    const result = await validateChain("host.parent.tld", transport, [anchor]);
+    expect(result.signed).toBe(false);
+    expect(result.errors.join(" ")).toMatch(/CNAME host\.parent\.tld is unsigned/);
   });
 
   it("reports root DNSKEY exception", async () => {

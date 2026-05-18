@@ -82,10 +82,74 @@ async function fetchDs(
   return pickRrset(packet, "DS", zone);
 }
 
+const MAX_CNAME_DEPTH = 8;
+
+async function validateLeaf(
+  host: string,
+  parentKeys: DnskeyData[],
+  dns: DnsTransport,
+  anchors: readonly RootTrustAnchor[],
+  errors: string[],
+  depth: number,
+): Promise<boolean> {
+  if (depth >= MAX_CNAME_DEPTH) {
+    errors.push(`CNAME chain depth limit (${MAX_CNAME_DEPTH}) exceeded at ${host}`);
+    return false;
+  }
+  let packet: { answers?: Answer[] | undefined };
+  try {
+    packet = await dns.query({ type: "A", name: host, dnssec: true });
+  } catch (e) {
+    errors.push(`A query for ${host}: ${(e as Error).message}`);
+    return false;
+  }
+  const cname = pickRrset(packet, "CNAME", host);
+  if (cname.rrset.length > 0) {
+    if (!cname.rrsig) {
+      errors.push(`CNAME ${host} is unsigned`);
+      return false;
+    }
+    const sigOk = verifyRrsig(cname.rrsig, cname.rrset as unknown as Answer[], parentKeys);
+    if (!sigOk) {
+      errors.push(`CNAME ${host} RRSIG did not verify`);
+      return false;
+    }
+    const first = cname.rrset[0] as unknown as { data?: unknown } | undefined;
+    const rawTarget = first?.data;
+    if (typeof rawTarget !== "string") {
+      errors.push(`CNAME ${host}: unparseable target`);
+      return false;
+    }
+    const target = rawTarget.toLowerCase().replace(/\.$/, "");
+    const targetResult = await validateChain(target, dns, anchors, depth + 1);
+    if (!targetResult.signed) {
+      for (const e of targetResult.errors) errors.push(`(resolving ${target}) ${e}`);
+      errors.push(`CNAME ${host} -> ${target}: target is insecure (not in a signed zone)`);
+      return false;
+    }
+    return true;
+  }
+  const a = pickRrset(packet, "A", host);
+  if (a.rrset.length > 0) {
+    if (!a.rrsig) {
+      errors.push(`A ${host} is unsigned`);
+      return false;
+    }
+    const sigOk = verifyRrsig(a.rrsig, a.rrset as unknown as Answer[], parentKeys);
+    if (!sigOk) {
+      errors.push(`A ${host} RRSIG did not verify`);
+      return false;
+    }
+    return true;
+  }
+  return true;
+}
+
 export async function validateChain(
   host: string,
   dns: DnsTransport,
   anchors: readonly RootTrustAnchor[] = ROOT_TRUST_ANCHORS,
+  depth: number = 0,
 ): Promise<ChainResult> {
   const result: ChainResult = {
     signed: false,
@@ -190,7 +254,12 @@ export async function validateChain(
     lastValidatedZone = child;
   }
 
-  result.signed = result.chain.length > 1;
+  let leafSecure = true;
+  if (result.errors.length === 0 && result.chain.length > 1) {
+    leafSecure = await validateLeaf(host, parentKeys, dns, anchors, result.errors, depth);
+  }
+
+  result.signed = result.chain.length > 1 && leafSecure;
   result.chainValid = result.errors.length === 0 && result.signed;
   result.finalZoneDnskeys = parentKeys;
   result.finalZone = lastValidatedZone;

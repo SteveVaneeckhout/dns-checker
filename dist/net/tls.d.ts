@@ -1,20 +1,20 @@
 import type { TLSSocket, PeerCertificate, DetailedPeerCertificate } from "node:tls";
 export interface TlsHandshakeOptions {
-  address: string;
-  port?: number;
-  servername: string;
-  timeoutMs?: number;
-  rejectUnauthorized?: boolean;
+    address: string;
+    port?: number;
+    servername: string;
+    timeoutMs?: number;
+    rejectUnauthorized?: boolean;
 }
 export interface TlsHandshakeResult {
-  authorized: boolean;
-  authorizationError?: string;
-  leaf: DetailedPeerCertificate;
-  chain: DetailedPeerCertificate[];
-  socket: TLSSocket;
+    authorized: boolean;
+    authorizationError?: string;
+    leaf: DetailedPeerCertificate;
+    chain: DetailedPeerCertificate[];
+    socket: TLSSocket;
 }
 export interface TlsTransport {
-  handshake(opts: TlsHandshakeOptions): Promise<TlsHandshakeResult>;
+    handshake(opts: TlsHandshakeOptions): Promise<TlsHandshakeResult>;
 }
 export declare function collectChain(leaf: DetailedPeerCertificate): DetailedPeerCertificate[];
 export declare function createTlsTransport(): TlsTransport;

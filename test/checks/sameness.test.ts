@@ -7,7 +7,7 @@ import { mockDns, mockHttp, packetWith } from "../helpers/mockTransports.ts";
 const opts = resolveOptions("host.test");
 
 describe("runSamenessCheck", () => {
-  it("returns ok and match=true when bodies are identical", async () => {
+  it("returns ok and similarity=1 when 200/200 bodies are identical", async () => {
     const dns = mockDns((q) =>
       q.type === "A"
         ? packetWith([{ name: q.name, type: "A", data: "192.0.2.1" }])
@@ -21,11 +21,13 @@ describe("runSamenessCheck", () => {
     }));
     const r = await runSamenessCheck("host.test", opts, dns, http);
     expect(r.ok).toBe(true);
-    expect(r.match).toBe(true);
-    expect(r.ipv4Hash).toBe(r.ipv6Hash);
+    expect(r.similarity).toBe(1);
+    expect(r.match).toBe(false);
+    expect(r.ipv4Hash).toBeUndefined();
+    expect(r.ipv6Hash).toBeUndefined();
   });
 
-  it("returns match=false when bodies differ", async () => {
+  it("returns similarity<1 and match=false when 200/200 bodies differ", async () => {
     const dns = mockDns((q) =>
       q.type === "A"
         ? packetWith([{ name: q.name, type: "A", data: "192.0.2.1" }])
@@ -34,12 +36,14 @@ describe("runSamenessCheck", () => {
     const http = mockHttp((o) => ({
       status: 200,
       headers: {},
-      body: Buffer.from(o.address === "::1" ? "bye" : "hello"),
+      body: Buffer.from(o.address === "::1" ? "totally different content here" : "hello world"),
       truncated: false,
     }));
     const r = await runSamenessCheck("host.test", opts, dns, http);
+    expect(r.ok).toBe(true);
     expect(r.match).toBe(false);
-    expect(r.ok).toBe(false);
+    expect(r.similarity).toBeDefined();
+    expect(r.similarity!).toBeLessThan(1);
   });
 
   it("returns errors when one family is missing", async () => {

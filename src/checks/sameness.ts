@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import type { DnsTransport } from "../net/dns.js";
-import type { HttpTransport } from "../net/http.js";
+import type { HttpFetchResult, HttpTransport } from "../net/http.js";
 import type { ResolvedOptions, SamenessResult } from "../types.js";
+import { jaccardShingleSimilarity } from "../util/similarity.js";
 
 async function firstAddress(
   dns: DnsTransport,
@@ -18,15 +19,18 @@ async function firstAddress(
   return undefined;
 }
 
-async function responseHash(
+async function fetchResponse(
   http: HttpTransport,
   address: string,
   servername: string,
   url: string,
   timeoutMs: number,
   bodyLimit: number,
-): Promise<string> {
-  const res = await http.get({ address, servername, url, timeoutMs, bodyLimit });
+): Promise<HttpFetchResult> {
+  return http.get({ address, servername, url, timeoutMs, bodyLimit });
+}
+
+function hashResponse(res: HttpFetchResult): string {
   return createHash("sha256")
     .update(`${res.status}\n${res.headers["location"] ?? ""}\n`)
     .update(res.body)
@@ -63,28 +67,41 @@ export async function runSamenessCheck(
     if (v6 !== undefined) base.ipv6Address = v6;
     return base;
   }
-  let ipv4Hash: string | undefined;
-  let ipv6Hash: string | undefined;
+  let ipv4Res: HttpFetchResult | undefined;
+  let ipv6Res: HttpFetchResult | undefined;
   try {
-    ipv4Hash = await responseHash(http, v4, hostname, opts.url, opts.timeoutMs, opts.bodyHashLimit);
+    ipv4Res = await fetchResponse(http, v4, hostname, opts.url, opts.timeoutMs, opts.bodyHashLimit);
   } catch (e) {
     errors.push(`ipv4 fetch: ${(e as Error).message}`);
   }
   try {
-    ipv6Hash = await responseHash(http, v6, hostname, opts.url, opts.timeoutMs, opts.bodyHashLimit);
+    ipv6Res = await fetchResponse(http, v6, hostname, opts.url, opts.timeoutMs, opts.bodyHashLimit);
   } catch (e) {
     errors.push(`ipv6 fetch: ${(e as Error).message}`);
   }
-  const match = ipv4Hash !== undefined && ipv6Hash !== undefined && ipv4Hash === ipv6Hash;
   const result: SamenessResult = {
-    ok: match && errors.length === 0,
+    ok: false,
     errors,
     url: opts.url,
     ipv4Address: v4,
     ipv6Address: v6,
-    match,
+    match: false,
   };
+  if (
+    ipv4Res !== undefined &&
+    ipv6Res !== undefined &&
+    ipv4Res.status === 200 &&
+    ipv6Res.status === 200
+  ) {
+    result.similarity = jaccardShingleSimilarity(ipv4Res.body, ipv6Res.body);
+    result.ok = errors.length === 0;
+    return result;
+  }
+  const ipv4Hash = ipv4Res !== undefined ? hashResponse(ipv4Res) : undefined;
+  const ipv6Hash = ipv6Res !== undefined ? hashResponse(ipv6Res) : undefined;
   if (ipv4Hash !== undefined) result.ipv4Hash = ipv4Hash;
   if (ipv6Hash !== undefined) result.ipv6Hash = ipv6Hash;
+  result.match = ipv4Hash !== undefined && ipv6Hash !== undefined && ipv4Hash === ipv6Hash;
+  result.ok = result.match && errors.length === 0;
   return result;
 }
