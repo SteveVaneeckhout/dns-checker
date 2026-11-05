@@ -13,7 +13,7 @@ a website's hostname:
 7. Is there a TLSA record and does the DANE fingerprint match the served
    certificate?
 
-ESM only. Requires Node `>=24.15.0`.
+ESM only. Requires Node `>=26.13.0`.
 
 ## Install
 
@@ -93,6 +93,9 @@ const transports: CheckTransports = {
 
 await checkDomain("example.com", undefined, transports);
 ```
+
+A custom `TlsTransport.handshake()` result must be `Disposable`: the checks hold it with
+`using`, and `[Symbol.dispose]()` should close the socket.
 
 ## What each check actually does
 

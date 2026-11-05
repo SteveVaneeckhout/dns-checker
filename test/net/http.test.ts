@@ -1,6 +1,70 @@
 import { Buffer } from "node:buffer";
 import { describe, expect, it } from "vitest";
 import { createHttpTransport, parseHttpResponse, resolveRedirect } from "../../src/net/http.ts";
+import { startHttpsServer, startTlsServer } from "../helpers/tlsServer.ts";
+
+describe("createHttpTransport (local server)", () => {
+  const get = (port: number, url = "https://localhost/page?q=1", extra = {}) =>
+    createHttpTransport().get({
+      address: "127.0.0.1",
+      port,
+      servername: "localhost",
+      url,
+      timeoutMs: 2000,
+      ...extra,
+    });
+
+  it("sends a GET request and parses the response", async () => {
+    let request = "";
+    await using server = await startTlsServer((socket) => {
+      socket.once("data", (d: Buffer) => {
+        request = d.toString("latin1");
+        socket.end("HTTP/1.1 200 OK\r\nContent-Length: 5\r\nX-Test: yes\r\n\r\nhello");
+      });
+    });
+    const r = await get(server.port);
+    expect(request).toMatch(/^GET \/page\?q=1 HTTP\/1\.1\r\nHost: localhost\r\n/);
+    expect(r.status).toBe(200);
+    expect(r.headers["x-test"]).toBe("yes");
+    expect(r.body.toString()).toBe("hello");
+    expect(r.truncated).toBe(false);
+  });
+
+  it("follows a same-host redirect", async () => {
+    let n = 0;
+    await using server = await startTlsServer((socket) => {
+      socket.once("data", () => {
+        socket.end(
+          n++ === 0
+            ? "HTTP/1.1 301 Moved\r\nLocation: /next\r\nContent-Length: 0\r\n\r\n"
+            : "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ndone",
+        );
+      });
+    });
+    const r = await get(server.port);
+    expect(r.status).toBe(200);
+    expect(r.body.toString()).toBe("done");
+  });
+
+  it("stops reading once the body limit plus header allowance is reached", async () => {
+    await using server = await startHttpsServer(`HTTP/1.1 200 OK\r\n\r\n${"x".repeat(200_000)}`);
+    const r = await get(server.port, undefined, { bodyLimit: 10 });
+    expect(r.body.length).toBe(10);
+    expect(r.truncated).toBe(true);
+  });
+
+  it("rejects a malformed response", async () => {
+    await using server = await startHttpsServer("garbage\r\n\r\n");
+    await expect(get(server.port)).rejects.toThrow(/malformed HTTP response/);
+  });
+
+  it("times out when the server never responds", async () => {
+    await using server = await startTlsServer();
+    await expect(get(server.port, undefined, { timeoutMs: 150 })).rejects.toThrow(
+      /HTTP fetch timed out after 150ms/,
+    );
+  });
+});
 
 describe("parseHttpResponse", () => {
   it("parses Content-Length body", () => {

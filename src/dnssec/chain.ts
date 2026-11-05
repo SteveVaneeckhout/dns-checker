@@ -4,6 +4,7 @@ import type { DnsTransport } from "../net/dns.js";
 import { computeDsDigest, computeKeyTag } from "./canonical.js";
 import { ROOT_TRUST_ANCHORS, type RootTrustAnchor } from "./rootKeys.js";
 import { verifyRrsig } from "./verify.js";
+import { errorMessage } from "../util/errors.js";
 
 export interface ChainValidationStep {
   zone: string;
@@ -100,7 +101,7 @@ async function validateLeaf(
   try {
     packet = await dns.query({ type: "A", name: host, dnssec: true });
   } catch (e) {
-    errors.push(`A query for ${host}: ${(e as Error).message}`);
+    errors.push(`A query for ${host}: ${errorMessage(e)}`);
     return false;
   }
   const cname = pickRrset(packet, "CNAME", host);
@@ -168,15 +169,15 @@ export async function validateChain(
       return result;
     }
     const rootKeyData = root.rrset.map((a) => a.data);
+    // Decode each anchor digest once. Unlike Buffer.from(hex), Uint8Array.fromHex throws on
+    // malformed hex, so a bad user-supplied anchor is reported instead of silently truncated.
+    const anchorDigests = anchors.map((ta) => ({ ta, digest: Uint8Array.fromHex(ta.digestHex) }));
     const rootKsk = rootKeyData.find((k) =>
-      anchors.some(
-        (ta) =>
+      anchorDigests.some(
+        ({ ta, digest }) =>
           computeKeyTag(k) === ta.keyTag &&
           k.algorithm === ta.algorithm &&
-          Buffer.compare(
-            computeDsDigest(".", k, ta.digestType),
-            Buffer.from(ta.digestHex, "hex"),
-          ) === 0,
+          Buffer.compare(computeDsDigest(".", k, ta.digestType), digest) === 0,
       ),
     );
     if (!rootKsk) {
@@ -195,7 +196,7 @@ export async function validateChain(
     rootKeys = rootKeyData;
     result.chain.push({ zone: ".", dsVerified: true, keysVerified: true });
   } catch (e) {
-    result.errors.push(`root DNSKEY: ${(e as Error).message}`);
+    result.errors.push(`root DNSKEY: ${errorMessage(e)}`);
     return result;
   }
 
@@ -209,7 +210,7 @@ export async function validateChain(
     try {
       ds = await fetchDs(dns, child);
     } catch (e) {
-      result.errors.push(`DS query for ${child}: ${(e as Error).message}`);
+      result.errors.push(`DS query for ${child}: ${errorMessage(e)}`);
       break;
     }
     if (ds.rrset.length === 0) {
@@ -230,7 +231,7 @@ export async function validateChain(
     try {
       dnskey = await fetchDnskeys(dns, child);
     } catch (e) {
-      result.errors.push(`DNSKEY query for ${child}: ${(e as Error).message}`);
+      result.errors.push(`DNSKEY query for ${child}: ${errorMessage(e)}`);
       break;
     }
     if (dnskey.rrset.length === 0 || !dnskey.rrsig) {
@@ -280,6 +281,6 @@ export async function verifyRecord(
     const ok = verifyRrsig(got.rrsig, got.rrset as Answer[], dnskeys);
     return { verified: ok, answers: got.rrset as Answer[] };
   } catch (e) {
-    return { verified: false, answers: [], error: (e as Error).message };
+    return { verified: false, answers: [], error: errorMessage(e) };
   }
 }

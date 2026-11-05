@@ -33,11 +33,7 @@ export function jaccardShingleSimilarity(a: Buffer, b: Buffer, k: number = DEFAU
   if (a.length === 0 || b.length === 0) return 0;
   const setA = shingleSet(a, k);
   const setB = shingleSet(b, k);
-  let intersection = 0;
-  const [small, large] = setA.size <= setB.size ? [setA, setB] : [setB, setA];
-  for (const v of small) {
-    if (large.has(v)) intersection++;
-  }
+  const intersection = setA.intersection(setB).size;
   const union = setA.size + setB.size - intersection;
   return union === 0 ? 1 : intersection / union;
 }

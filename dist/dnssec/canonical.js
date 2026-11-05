@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
+import { hash } from "node:crypto";
 const TYPE_NUMBERS = {
     A: 1,
     NS: 2,
@@ -186,10 +186,10 @@ export function computeKeyTag(dnskey) {
 export function computeDsDigest(ownerName, dnskey, digestType) {
     const input = Buffer.concat([encodeName(ownerName), encodeDnskeyRdata(dnskey)]);
     if (digestType === 1)
-        return createHash("sha1").update(input).digest();
+        return hash("sha1", input, "buffer");
     if (digestType === 2)
-        return createHash("sha256").update(input).digest();
+        return hash("sha256", input, "buffer");
     if (digestType === 4)
-        return createHash("sha384").update(input).digest();
+        return hash("sha384", input, "buffer");
     throw new Error(`unsupported DS digest type: ${digestType}`);
 }

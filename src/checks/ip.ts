@@ -1,22 +1,8 @@
 import type { DnsTransport } from "../net/dns.js";
+import { stringRecords } from "../net/records.js";
 import type { TlsTransport } from "../net/tls.js";
 import type { FamilyResult, IpResult, ResolvedOptions } from "../types.js";
-
-async function resolveAddrs(
-  dns: DnsTransport,
-  type: "A" | "AAAA",
-  name: string,
-): Promise<string[]> {
-  const packet = await dns.query({ type, name });
-  const answers = packet.answers ?? [];
-  const out: string[] = [];
-  for (const a of answers) {
-    if (a.type === type && typeof (a as { data?: unknown }).data === "string") {
-      out.push((a as unknown as { data: string }).data);
-    }
-  }
-  return out;
-}
+import { errorMessage } from "../util/errors.js";
 
 async function probeReachable(
   tls: TlsTransport,
@@ -25,8 +11,7 @@ async function probeReachable(
   timeoutMs: number,
 ): Promise<boolean> {
   try {
-    const r = await tls.handshake({ address, servername, timeoutMs });
-    r.socket.destroy();
+    using _ = await tls.handshake({ address, servername, timeoutMs });
     return true;
   } catch {
     return false;
@@ -41,7 +26,7 @@ async function probeFamily(
   timeoutMs: number,
 ): Promise<FamilyResult> {
   try {
-    const addresses = await resolveAddrs(dns, type, host);
+    const addresses = await stringRecords(dns, type, host);
     if (addresses.length === 0) {
       return { addresses: [], reachable: false, error: "no address records" };
     }
@@ -54,7 +39,7 @@ async function probeFamily(
     }
     return { addresses, reachable };
   } catch (e) {
-    return { addresses: [], reachable: false, error: (e as Error).message };
+    return { addresses: [], reachable: false, error: errorMessage(e) };
   }
 }
 

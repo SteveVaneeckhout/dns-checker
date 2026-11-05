@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import { createPublicKey, verify as cryptoVerify } from "node:crypto";
 import { computeKeyTag, rrsigSigningInput } from "./canonical.js";
 function b64url(buf) {
-    return buf.toString("base64").replace(/=+$/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+    return buf.toString("base64url");
 }
 function parseRsaKey(key) {
     if (key.length < 1)

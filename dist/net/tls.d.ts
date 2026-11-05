@@ -6,7 +6,11 @@ export interface TlsHandshakeOptions {
     timeoutMs?: number;
     rejectUnauthorized?: boolean;
 }
-export interface TlsHandshakeResult {
+/**
+ * A completed handshake. The socket stays open so callers can inspect it; dispose the
+ * result (`using r = await tls.handshake(...)`) to close it.
+ */
+export interface TlsHandshakeResult extends Disposable {
     authorized: boolean;
     authorizationError?: string;
     leaf: DetailedPeerCertificate;

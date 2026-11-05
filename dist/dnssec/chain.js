@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { computeDsDigest, computeKeyTag } from "./canonical.js";
 import { ROOT_TRUST_ANCHORS } from "./rootKeys.js";
 import { verifyRrsig } from "./verify.js";
+import { errorMessage } from "../util/errors.js";
 function pickRrset(packet, type, name) {
     const all = packet.answers ?? [];
     const lname = name.toLowerCase().replace(/\.$/, "");
@@ -53,7 +54,7 @@ async function validateLeaf(host, parentKeys, dns, anchors, errors, depth) {
         packet = await dns.query({ type: "A", name: host, dnssec: true });
     }
     catch (e) {
-        errors.push(`A query for ${host}: ${e.message}`);
+        errors.push(`A query for ${host}: ${errorMessage(e)}`);
         return false;
     }
     const cname = pickRrset(packet, "CNAME", host);
@@ -115,9 +116,12 @@ export async function validateChain(host, dns, anchors = ROOT_TRUST_ANCHORS, dep
             return result;
         }
         const rootKeyData = root.rrset.map((a) => a.data);
-        const rootKsk = rootKeyData.find((k) => anchors.some((ta) => computeKeyTag(k) === ta.keyTag &&
+        // Decode each anchor digest once. Unlike Buffer.from(hex), Uint8Array.fromHex throws on
+        // malformed hex, so a bad user-supplied anchor is reported instead of silently truncated.
+        const anchorDigests = anchors.map((ta) => ({ ta, digest: Uint8Array.fromHex(ta.digestHex) }));
+        const rootKsk = rootKeyData.find((k) => anchorDigests.some(({ ta, digest }) => computeKeyTag(k) === ta.keyTag &&
             k.algorithm === ta.algorithm &&
-            Buffer.compare(computeDsDigest(".", k, ta.digestType), Buffer.from(ta.digestHex, "hex")) === 0));
+            Buffer.compare(computeDsDigest(".", k, ta.digestType), digest) === 0));
         if (!rootKsk) {
             result.errors.push("no root DNSKEY matches IANA trust anchor");
             return result;
@@ -131,7 +135,7 @@ export async function validateChain(host, dns, anchors = ROOT_TRUST_ANCHORS, dep
         result.chain.push({ zone: ".", dsVerified: true, keysVerified: true });
     }
     catch (e) {
-        result.errors.push(`root DNSKEY: ${e.message}`);
+        result.errors.push(`root DNSKEY: ${errorMessage(e)}`);
         return result;
     }
     const zones = findZoneCuts(host).filter((z) => z !== ".");
@@ -144,7 +148,7 @@ export async function validateChain(host, dns, anchors = ROOT_TRUST_ANCHORS, dep
             ds = await fetchDs(dns, child);
         }
         catch (e) {
-            result.errors.push(`DS query for ${child}: ${e.message}`);
+            result.errors.push(`DS query for ${child}: ${errorMessage(e)}`);
             break;
         }
         if (ds.rrset.length === 0) {
@@ -165,7 +169,7 @@ export async function validateChain(host, dns, anchors = ROOT_TRUST_ANCHORS, dep
             dnskey = await fetchDnskeys(dns, child);
         }
         catch (e) {
-            result.errors.push(`DNSKEY query for ${child}: ${e.message}`);
+            result.errors.push(`DNSKEY query for ${child}: ${errorMessage(e)}`);
             break;
         }
         if (dnskey.rrset.length === 0 || !dnskey.rrsig) {
@@ -210,6 +214,6 @@ export async function verifyRecord(type, name, dnskeys, dns) {
         return { verified: ok, answers: got.rrset };
     }
     catch (e) {
-        return { verified: false, answers: [], error: e.message };
+        return { verified: false, answers: [], error: errorMessage(e) };
     }
 }

@@ -4,7 +4,7 @@ import type { Answer, DnskeyData, RrsigData } from "dns-packet";
 import { computeKeyTag, rrsigSigningInput } from "./canonical.js";
 
 function b64url(buf: Buffer): string {
-  return buf.toString("base64").replace(/=+$/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+  return buf.toString("base64url");
 }
 
 function parseRsaKey(key: Buffer): { modulus: Buffer; exponent: Buffer } {

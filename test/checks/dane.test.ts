@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
+import { createHash, X509Certificate } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { TEST_CERT } from "../helpers/tlsServer.ts";
 import type { TlsaData } from "dns-packet";
 import { runDaneCheck, tlsaMatches } from "../../src/checks/dane.ts";
 import { resolveOptions } from "../../src/options.ts";
@@ -25,17 +26,31 @@ function sha256(b: Buffer) {
   return createHash("sha256").update(b).digest();
 }
 
+// A real certificate, so selector 1 can extract its SubjectPublicKeyInfo.
+const realCert = new X509Certificate(TEST_CERT);
+const realSpki = realCert.publicKey.export({ type: "spki", format: "der" });
+
 describe("tlsaMatches", () => {
   it("matches leaf cert SPKI SHA-256 (3 1 1)", () => {
-    const pubkey = Buffer.from("0102030405", "hex");
-    const cert = fakeCert({ pubkey });
+    const cert = fakeCert({ raw: realCert.raw });
     const data: TlsaData = {
       usage: 3,
       selector: 1,
       matchingType: 1,
-      certificate: sha256(pubkey),
+      certificate: sha256(realSpki),
     };
     expect(tlsaMatches(data, cert, [cert])).toBe(true);
+  });
+  it("hashes the full SubjectPublicKeyInfo, not Node's raw `pubkey` bytes (selector 1)", () => {
+    const pubkey = Buffer.from("0102030405", "hex");
+    const cert = fakeCert({ raw: realCert.raw, pubkey });
+    const data: TlsaData = { usage: 3, selector: 1, matchingType: 1, certificate: sha256(pubkey) };
+    expect(tlsaMatches(data, cert, [cert])).toBe(false);
+  });
+  it("does not match selector 1 when the certificate DER cannot be parsed", () => {
+    const cert = fakeCert({ raw: Buffer.from([0xaa, 0xbb]) });
+    const data: TlsaData = { usage: 3, selector: 1, matchingType: 0, certificate: Buffer.alloc(0) };
+    expect(tlsaMatches(data, cert, [cert])).toBe(false);
   });
   it("matches leaf cert full DER exact (3 0 0)", () => {
     const raw = Buffer.from("ababab", "hex");
@@ -160,13 +175,12 @@ describe("runDaneCheck with a signed zone fixture", () => {
   };
 
   it("returns ok when a TLSA record matches the served cert", async () => {
-    const pubkey = Buffer.from("11223344", "hex");
-    const cert = fakeCert({ pubkey });
+    const cert = fakeCert({ raw: realCert.raw });
     const tlsaRecord: TlsaData = {
       usage: 3,
       selector: 1,
       matchingType: 1,
-      certificate: sha256(pubkey),
+      certificate: sha256(realSpki),
     };
     const { dns, localOpts } = buildEnv([tlsaRecord]);
     const tls = mockTls(() => fakeHandshake(cert));

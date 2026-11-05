@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
+import { hash } from "node:crypto";
 import type { Answer, CaaData, DnskeyData, DsData, RrsigData, SoaData, TlsaData } from "dns-packet";
 
 const TYPE_NUMBERS: Record<string, number> = {
@@ -194,8 +194,8 @@ export function computeKeyTag(dnskey: DnskeyData): number {
 
 export function computeDsDigest(ownerName: string, dnskey: DnskeyData, digestType: number): Buffer {
   const input = Buffer.concat([encodeName(ownerName), encodeDnskeyRdata(dnskey)]);
-  if (digestType === 1) return createHash("sha1").update(input).digest();
-  if (digestType === 2) return createHash("sha256").update(input).digest();
-  if (digestType === 4) return createHash("sha384").update(input).digest();
+  if (digestType === 1) return hash("sha1", input, "buffer");
+  if (digestType === 2) return hash("sha256", input, "buffer");
+  if (digestType === 4) return hash("sha384", input, "buffer");
   throw new Error(`unsupported DS digest type: ${digestType}`);
 }

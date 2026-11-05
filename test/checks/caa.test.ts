@@ -33,6 +33,15 @@ describe("issuerMatchesTag", () => {
   it("returns matched=false when value is empty after parsing", () => {
     expect(issuerMatchesTag("issuer", ";policy=value")).toEqual({ matched: false, known: true });
   });
+  it.each(["constructor", "__proto__", "toString", "hasOwnProperty"])(
+    "treats the Object.prototype name %j as an unknown CA tag instead of crashing",
+    (tag) => {
+      expect(issuerMatchesTag("O=Let's Encrypt, CN=R3", tag)).toEqual({
+        matched: false,
+        known: false,
+      });
+    },
+  );
 });
 
 describe("runCaaCheck", () => {

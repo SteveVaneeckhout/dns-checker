@@ -1,5 +1,8 @@
-import type { DetailedPeerCertificate, PeerCertificate } from "node:tls";
+import { once } from "node:events";
+import net, { type AddressInfo } from "node:net";
+import type { DetailedPeerCertificate, PeerCertificate, TLSSocket } from "node:tls";
 import { describe, expect, it } from "vitest";
+import { startTlsServer } from "../helpers/tlsServer.ts";
 import {
   certIssuerString,
   certSubjectAltNames,
@@ -129,5 +132,84 @@ describe("createTlsTransport (error paths)", () => {
         timeoutMs: 500,
       }),
     ).rejects.toThrow();
+  });
+
+  it("times out when the server accepts TCP but never answers the TLS handshake", async () => {
+    const server = net.createServer(() => {});
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const { port } = server.address() as AddressInfo;
+    try {
+      await expect(
+        createTlsTransport().handshake({
+          address: "127.0.0.1",
+          port,
+          servername: "localhost",
+          timeoutMs: 100,
+        }),
+      ).rejects.toThrow(/TLS handshake timed out after 100ms/);
+    } finally {
+      server.close();
+    }
+  });
+});
+
+describe("createTlsTransport (local server)", () => {
+  it("returns the leaf certificate and an unauthorized result for a self-signed cert", async () => {
+    await using server = await startTlsServer();
+    using r = await createTlsTransport().handshake({
+      address: "127.0.0.1",
+      port: server.port,
+      servername: "localhost",
+      timeoutMs: 2000,
+    });
+    expect(certSubjectCN(r.leaf)).toBe("localhost");
+    expect(certIssuerString(r.leaf)).toBe("O=dns-checker test, CN=localhost");
+    expect(certSubjectAltNames(r.leaf)).toEqual(["localhost"]);
+    expect(r.chain).toHaveLength(1);
+    expect(r.authorized).toBe(false);
+    expect(r.authorizationError).toBeDefined();
+    expect(r.socket.destroyed).toBe(false);
+  });
+
+  it("closes the socket when the result is disposed", async () => {
+    await using server = await startTlsServer();
+    let socket;
+    {
+      using r = await createTlsTransport().handshake({
+        address: "127.0.0.1",
+        port: server.port,
+        servername: "localhost",
+      });
+      socket = r.socket;
+    }
+    expect(socket.destroyed).toBe(true);
+  });
+
+  it("does not crash on a socket error after the handshake", async () => {
+    let serverSide: TLSSocket | undefined;
+    await using server = await startTlsServer((s) => {
+      serverSide = s;
+    });
+    using r = await createTlsTransport().handshake({
+      address: "127.0.0.1",
+      port: server.port,
+      servername: "localhost",
+    });
+    r.socket.emit("error", new Error("late reset"));
+    serverSide?.destroy();
+    expect(r.leaf).toBeDefined();
+  });
+
+  it("rejects an untrusted certificate when rejectUnauthorized is set", async () => {
+    await using server = await startTlsServer();
+    await expect(
+      createTlsTransport().handshake({
+        address: "127.0.0.1",
+        port: server.port,
+        servername: "localhost",
+        rejectUnauthorized: true,
+      }),
+    ).rejects.toThrow(/self-signed/);
   });
 });

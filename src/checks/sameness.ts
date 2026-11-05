@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import type { DnsTransport } from "../net/dns.js";
 import type { HttpFetchResult, HttpTransport } from "../net/http.js";
+import { stringRecords } from "../net/records.js";
 import type { ResolvedOptions, SamenessResult } from "../types.js";
+import { errorMessage } from "../util/errors.js";
 import { jaccardShingleSimilarity } from "../util/similarity.js";
 
 async function firstAddress(
@@ -9,14 +11,7 @@ async function firstAddress(
   type: "A" | "AAAA",
   name: string,
 ): Promise<string | undefined> {
-  const packet = await dns.query({ type, name });
-  const answers = packet.answers ?? [];
-  for (const a of answers) {
-    if (a.type === type && typeof (a as { data?: unknown }).data === "string") {
-      return (a as unknown as { data: string }).data;
-    }
-  }
-  return undefined;
+  return (await stringRecords(dns, type, name))[0];
 }
 
 async function fetchResponse(
@@ -45,12 +40,12 @@ export async function runSamenessCheck(
 ): Promise<SamenessResult> {
   const errors: string[] = [];
   const [v4, v6] = await Promise.all([
-    firstAddress(dns, "A", hostname).catch((e: Error) => {
-      errors.push(`A lookup: ${e.message}`);
+    firstAddress(dns, "A", hostname).catch((e: unknown) => {
+      errors.push(`A lookup: ${errorMessage(e)}`);
       return undefined;
     }),
-    firstAddress(dns, "AAAA", hostname).catch((e: Error) => {
-      errors.push(`AAAA lookup: ${e.message}`);
+    firstAddress(dns, "AAAA", hostname).catch((e: unknown) => {
+      errors.push(`AAAA lookup: ${errorMessage(e)}`);
       return undefined;
     }),
   ]);
@@ -72,12 +67,12 @@ export async function runSamenessCheck(
   try {
     ipv4Res = await fetchResponse(http, v4, hostname, opts.url, opts.timeoutMs, opts.bodyHashLimit);
   } catch (e) {
-    errors.push(`ipv4 fetch: ${(e as Error).message}`);
+    errors.push(`ipv4 fetch: ${errorMessage(e)}`);
   }
   try {
     ipv6Res = await fetchResponse(http, v6, hostname, opts.url, opts.timeoutMs, opts.bodyHashLimit);
   } catch (e) {
-    errors.push(`ipv6 fetch: ${(e as Error).message}`);
+    errors.push(`ipv6 fetch: ${errorMessage(e)}`);
   }
   const result: SamenessResult = {
     ok: false,

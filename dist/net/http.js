@@ -1,19 +1,15 @@
-import tls from "node:tls";
 import { Buffer } from "node:buffer";
+import { once } from "node:events";
+import { addAbortSignal } from "node:stream";
+import tls from "node:tls";
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 export function resolveRedirect(status, locationHeader, currentUrl, expectedHostname) {
     if (!REDIRECT_STATUSES.has(status))
         return null;
     if (!locationHeader)
         return null;
-    let next;
-    try {
-        next = new URL(locationHeader, currentUrl);
-    }
-    catch {
-        return null;
-    }
-    if (next.hostname !== expectedHostname)
+    const next = URL.parse(locationHeader, currentUrl);
+    if (next === null || next.hostname !== expectedHostname)
         return null;
     return next;
 }
@@ -101,78 +97,50 @@ function decodeChunked(buf, bodyLimit) {
     }
     return null;
 }
-function fetchOnce(opts) {
-    return new Promise((resolve, reject) => {
-        let settled = false;
-        const port = opts.port ?? 443;
-        const timeoutMs = opts.timeoutMs ?? 5000;
-        const bodyLimit = opts.bodyLimit ?? 1024 * 1024;
-        let url;
-        try {
-            url = new URL(opts.url);
-        }
-        catch {
-            reject(new Error(`invalid URL: ${opts.url}`));
-            return;
-        }
-        const path = `${url.pathname || "/"}${url.search}`;
-        const socket = tls.connect({
-            host: opts.address,
-            port,
-            servername: opts.servername,
-            rejectUnauthorized: false,
-            ALPNProtocols: ["http/1.1"],
-        });
-        const chunks = [];
-        let totalReceived = 0;
-        const maxBuffer = bodyLimit + 65536;
-        const timer = setTimeout(() => {
-            if (settled)
-                return;
-            settled = true;
-            socket.destroy();
-            reject(new Error(`HTTP fetch timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-        const finish = (buf) => {
-            const parsed = parseHttpResponse(buf, bodyLimit);
-            if (!parsed) {
-                reject(new Error("malformed HTTP response"));
-                return;
-            }
-            resolve(parsed);
-        };
-        socket.once("secureConnect", () => {
-            const req = `GET ${path} HTTP/1.1\r\nHost: ${opts.servername}\r\nUser-Agent: dns-checker\r\nAccept: */*\r\nConnection: close\r\n\r\n`;
-            socket.write(req);
-        });
-        socket.on("data", (chunk) => {
+async function fetchOnce(opts) {
+    const port = opts.port ?? 443;
+    const timeoutMs = opts.timeoutMs ?? 5000;
+    const bodyLimit = opts.bodyLimit ?? 1024 * 1024;
+    const url = URL.parse(opts.url);
+    if (url === null)
+        throw new Error(`invalid URL: ${opts.url}`);
+    const path = `${url.pathname || "/"}${url.search}`;
+    const signal = AbortSignal.timeout(timeoutMs);
+    const socket = tls.connect({
+        host: opts.address,
+        port,
+        servername: opts.servername,
+        rejectUnauthorized: false,
+        ALPNProtocols: ["http/1.1"],
+    });
+    // On timeout the socket is destroyed with an AbortError, which ends the awaits below.
+    addAbortSignal(signal, socket);
+    const chunks = [];
+    let totalReceived = 0;
+    // Enough for the headers plus `bodyLimit` bytes of body; stop reading after that.
+    const maxBuffer = bodyLimit + 65536;
+    try {
+        await once(socket, "secureConnect");
+        socket.write(`GET ${path} HTTP/1.1\r\nHost: ${opts.servername}\r\nUser-Agent: dns-checker\r\nAccept: */*\r\nConnection: close\r\n\r\n`);
+        for await (const chunk of socket) {
             chunks.push(chunk);
             totalReceived += chunk.length;
-            if (totalReceived >= maxBuffer) {
-                if (settled)
-                    return;
-                settled = true;
-                clearTimeout(timer);
-                socket.destroy();
-                finish(Buffer.concat(chunks));
-            }
-        });
-        socket.once("end", () => {
-            if (settled)
-                return;
-            settled = true;
-            clearTimeout(timer);
-            finish(Buffer.concat(chunks));
-        });
-        socket.once("error", (err) => {
-            if (settled)
-                return;
-            settled = true;
-            clearTimeout(timer);
-            socket.destroy();
-            reject(err);
-        });
-    });
+            if (totalReceived >= maxBuffer)
+                break;
+        }
+    }
+    catch (err) {
+        if (signal.aborted)
+            throw new Error(`HTTP fetch timed out after ${timeoutMs}ms`);
+        throw err;
+    }
+    finally {
+        socket.destroy();
+    }
+    const parsed = parseHttpResponse(Buffer.concat(chunks, totalReceived), bodyLimit);
+    if (!parsed)
+        throw new Error("malformed HTTP response");
+    return parsed;
 }
 export function createHttpTransport() {
     return {

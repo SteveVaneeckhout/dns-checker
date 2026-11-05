@@ -1,18 +1,8 @@
-async function resolveAddrs(dns, type, name) {
-    const packet = await dns.query({ type, name });
-    const answers = packet.answers ?? [];
-    const out = [];
-    for (const a of answers) {
-        if (a.type === type && typeof a.data === "string") {
-            out.push(a.data);
-        }
-    }
-    return out;
-}
+import { stringRecords } from "../net/records.js";
+import { errorMessage } from "../util/errors.js";
 async function probeReachable(tls, address, servername, timeoutMs) {
     try {
-        const r = await tls.handshake({ address, servername, timeoutMs });
-        r.socket.destroy();
+        using _ = await tls.handshake({ address, servername, timeoutMs });
         return true;
     }
     catch {
@@ -21,7 +11,7 @@ async function probeReachable(tls, address, servername, timeoutMs) {
 }
 async function probeFamily(dns, tls, host, type, timeoutMs) {
     try {
-        const addresses = await resolveAddrs(dns, type, host);
+        const addresses = await stringRecords(dns, type, host);
         if (addresses.length === 0) {
             return { addresses: [], reachable: false, error: "no address records" };
         }
@@ -35,7 +25,7 @@ async function probeFamily(dns, tls, host, type, timeoutMs) {
         return { addresses, reachable };
     }
     catch (e) {
-        return { addresses: [], reachable: false, error: e.message };
+        return { addresses: [], reachable: false, error: errorMessage(e) };
     }
 }
 export async function runIpCheck(hostname, opts, dns, tls) {

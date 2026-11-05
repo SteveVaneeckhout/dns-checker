@@ -1,18 +1,9 @@
-async function resolveNamesAt(dns, name) {
-    const packet = await dns.query({ type: "NS", name });
-    const answers = packet.answers ?? [];
-    const out = [];
-    for (const a of answers) {
-        if (a.type === "NS" && typeof a.data === "string") {
-            out.push(a.data);
-        }
-    }
-    return out;
-}
+import { stringRecords } from "../net/records.js";
+import { errorMessage } from "../util/errors.js";
 async function resolveApexNs(dns, hostname) {
     let cur = hostname;
     while (cur) {
-        const names = await resolveNamesAt(dns, cur);
+        const names = await stringRecords(dns, "NS", cur);
         if (names.length > 0)
             return { apex: cur, names };
         const idx = cur.indexOf(".");
@@ -21,17 +12,6 @@ async function resolveApexNs(dns, hostname) {
         cur = cur.slice(idx + 1);
     }
     return { apex: hostname, names: [] };
-}
-async function resolveAddrs(dns, type, name) {
-    const packet = await dns.query({ type, name });
-    const answers = packet.answers ?? [];
-    const out = [];
-    for (const a of answers) {
-        if (a.type === type && typeof a.data === "string") {
-            out.push(a.data);
-        }
-    }
-    return out;
 }
 async function probeNs(dns, address, apex, timeoutMs) {
     try {
@@ -50,7 +30,7 @@ async function probeNs(dns, address, apex, timeoutMs) {
 }
 async function probeFamily(dns, nsName, apex, type, timeoutMs) {
     try {
-        const addresses = await resolveAddrs(dns, type, nsName);
+        const addresses = await stringRecords(dns, type, nsName);
         if (addresses.length === 0) {
             return { addresses: [], reachable: false, error: "no address records" };
         }
@@ -64,7 +44,7 @@ async function probeFamily(dns, nsName, apex, type, timeoutMs) {
         return { addresses, reachable };
     }
     catch (e) {
-        return { addresses: [], reachable: false, error: e.message };
+        return { addresses: [], reachable: false, error: errorMessage(e) };
     }
 }
 export async function runNameserverCheck(hostname, opts, dns) {
@@ -76,7 +56,7 @@ export async function runNameserverCheck(hostname, opts, dns) {
     catch (e) {
         return {
             ok: false,
-            errors: [`NS query failed: ${e.message}`],
+            errors: [`NS query failed: ${errorMessage(e)}`],
             nameservers: [],
         };
     }

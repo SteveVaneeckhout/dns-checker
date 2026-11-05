@@ -1,4 +1,7 @@
+import { Buffer } from "node:buffer";
+import { randomInt } from "node:crypto";
 import dgram from "node:dgram";
+import { once } from "node:events";
 import net from "node:net";
 import { isIPv4, isIPv6 } from "node:net";
 import dnsPacket from "dns-packet";
@@ -23,14 +26,19 @@ export interface DnsTransportDefaults {
   timeoutMs: number;
 }
 
+/** A DNS query got no (matching) answer within its time limit. */
+export class DnsTimeoutError extends Error {
+  override readonly name = "DnsTimeoutError";
+}
+
 function buildQuery(
   opts: Required<Pick<DnsQueryOptions, "type" | "name">> & DnsQueryOptions,
 ): Buffer {
-  const id = Math.floor(Math.random() * 0xffff);
   const flags = opts.recursive === false ? 0 : dnsPacket.RECURSION_DESIRED;
   const packet: dnsPacket.Packet = {
     type: "query",
-    id,
+    // Unpredictable 16-bit ID: replies are only accepted when they echo it.
+    id: randomInt(0x10000),
     flags,
     questions: [{ type: opts.type, name: opts.name, class: "IN" }],
   };
@@ -57,98 +65,74 @@ function udpFamily(addr: string): "udp4" | "udp6" {
   throw new Error(`not an IP address: ${addr}`);
 }
 
-export function queryUdp(
-  query: Buffer,
-  server: string,
-  port: number,
-  timeoutMs: number,
-): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const socket = dgram.createSocket(udpFamily(server));
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      socket.close();
-      reject(new Error(`DNS UDP query timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    socket.once("error", (err) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      socket.close();
-      reject(err);
-    });
-    socket.once("message", (msg) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      socket.close();
-      resolve(msg);
-    });
-    socket.send(query, port, server, (err) => {
-      if (err && !settled) {
-        settled = true;
-        clearTimeout(timer);
-        socket.close();
-        reject(err);
-      }
-    });
-  });
+function sameId(a: Buffer, b: Buffer): boolean {
+  return a.length >= 2 && b.length >= 2 && a.readUInt16BE(0) === b.readUInt16BE(0);
 }
 
-export function queryTcp(
+/**
+ * Sends `query` over UDP and resolves with the first reply that carries the same ID.
+ * Rejects with `DnsTimeoutError` if none arrives within `timeoutMs`.
+ */
+export async function queryUdp(
   query: Buffer,
   server: string,
   port: number,
   timeoutMs: number,
 ): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
+  const signal = AbortSignal.timeout(timeoutMs);
+  await using socket = dgram.createSocket(udpFamily(server));
+  // Re-emit send failures (e.g. EMSGSIZE) as "error", which the once() below rejects on.
+  socket.send(query, port, server, (err) => {
+    if (err) socket.emit("error", err);
+  });
+  try {
+    while (true) {
+      const [msg] = (await once(socket, "message", { signal })) as [Buffer];
+      if (sameId(msg, query)) return msg;
+    }
+  } catch (err) {
+    if (signal.aborted) throw new DnsTimeoutError(`DNS UDP query timed out after ${timeoutMs}ms`);
+    throw err;
+  }
+}
+
+/**
+ * Sends `query` over TCP (2-byte length prefix, RFC 1035 §4.2.2) and resolves with the
+ * reply. Rejects with `DnsTimeoutError` if it doesn't complete within `timeoutMs`.
+ */
+export async function queryTcp(
+  query: Buffer,
+  server: string,
+  port: number,
+  timeoutMs: number,
+): Promise<Buffer> {
+  const signal = AbortSignal.timeout(timeoutMs);
+  // On abort, net.connect destroys the socket, which ends the awaits below.
+  const socket = net.connect({ host: server, port, signal });
+  try {
+    await once(socket, "connect");
+    const len = Buffer.alloc(2);
+    len.writeUInt16BE(query.length, 0);
+    socket.write(Buffer.concat([len, query]));
+
     const chunks: Buffer[] = [];
-    let expected = -1;
     let received = 0;
-    const sock = net.connect({ host: server, port });
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      sock.destroy();
-      reject(new Error(`DNS TCP query timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    sock.once("connect", () => {
-      const len = Buffer.alloc(2);
-      len.writeUInt16BE(query.length, 0);
-      sock.write(Buffer.concat([len, query]));
-    });
-    sock.on("data", (chunk: Buffer) => {
+    let expected = -1;
+    for await (const chunk of socket as AsyncIterable<Buffer>) {
       chunks.push(chunk);
       received += chunk.length;
-      const buf = Buffer.concat(chunks);
-      if (expected === -1 && buf.length >= 2) {
-        expected = buf.readUInt16BE(0);
-      }
+      if (expected === -1 && received >= 2) expected = Buffer.concat(chunks, 2).readUInt16BE(0);
       if (expected !== -1 && received >= expected + 2) {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        sock.end();
-        resolve(buf.subarray(2, 2 + expected));
+        return Buffer.concat(chunks, received).subarray(2, 2 + expected);
       }
-    });
-    sock.once("error", (err) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      sock.destroy();
-      reject(err);
-    });
-    sock.once("close", () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(new Error("DNS TCP connection closed before response was complete"));
-    });
-  });
+    }
+    throw new Error("DNS TCP connection closed before response was complete");
+  } catch (err) {
+    if (signal.aborted) throw new DnsTimeoutError(`DNS TCP query timed out after ${timeoutMs}ms`);
+    throw err;
+  } finally {
+    socket.destroy();
+  }
 }
 
 export function createDnsTransport(defaults: DnsTransportDefaults): DnsTransport {
@@ -162,16 +146,13 @@ export function createDnsTransport(defaults: DnsTransportDefaults): DnsTransport
       try {
         response = await queryUdp(buf, server, port, timeoutMs);
       } catch (err) {
-        if (err instanceof Error && /timed out/i.test(err.message)) {
-          response = await queryTcp(buf, server, port, timeoutMs);
-        } else {
-          throw err;
-        }
+        // UDP can be filtered while TCP still works, so retry once over TCP.
+        if (!(err instanceof DnsTimeoutError)) throw err;
+        response = await queryTcp(buf, server, port, timeoutMs);
       }
       let decoded = dnsPacket.decode(response);
       if (decoded.flag_tc) {
-        const tcpResponse = await queryTcp(buf, server, port, timeoutMs);
-        decoded = dnsPacket.decode(tcpResponse);
+        decoded = dnsPacket.decode(await queryTcp(buf, server, port, timeoutMs));
       }
       return decoded;
     },

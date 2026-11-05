@@ -3,25 +3,28 @@ import type { DnsTransport } from "../net/dns.js";
 import type { TlsTransport } from "../net/tls.js";
 import { certIssuerString, certSubjectCN } from "../net/tls.js";
 import type { CaaRecord, CaaResult, ResolvedOptions } from "../types.js";
+import { errorMessage } from "../util/errors.js";
 
-const CA_TAG_MAP: Record<string, string[]> = {
-  "letsencrypt.org": ["Let's Encrypt"],
-  "digicert.com": ["DigiCert"],
-  "sectigo.com": ["Sectigo", "Comodo", "ZeroSSL"],
-  "comodoca.com": ["Sectigo", "Comodo"],
-  "globalsign.com": ["GlobalSign"],
-  "godaddy.com": ["GoDaddy", "Go Daddy", "Starfield"],
-  "starfieldtech.com": ["Starfield"],
-  "amazontrust.com": ["Amazon"],
-  "amazon.com": ["Amazon"],
-  "pki.goog": ["Google Trust Services", "GTS"],
-  "google.com": ["Google Trust Services", "GTS"],
-  "buypass.com": ["Buypass"],
-  "buypass.no": ["Buypass"],
-  "entrust.net": ["Entrust"],
-  "ssl.com": ["SSL.com", "SSL Corp"],
-  "certum.pl": ["Certum", "Asseco", "Unizeto"],
-};
+// A Map, not an object literal: CAA tags come from DNS, and names like "constructor"
+// must not resolve to inherited Object.prototype members.
+const CA_TAG_MAP: ReadonlyMap<string, readonly string[]> = new Map([
+  ["letsencrypt.org", ["Let's Encrypt"]],
+  ["digicert.com", ["DigiCert"]],
+  ["sectigo.com", ["Sectigo", "Comodo", "ZeroSSL"]],
+  ["comodoca.com", ["Sectigo", "Comodo"]],
+  ["globalsign.com", ["GlobalSign"]],
+  ["godaddy.com", ["GoDaddy", "Go Daddy", "Starfield"]],
+  ["starfieldtech.com", ["Starfield"]],
+  ["amazontrust.com", ["Amazon"]],
+  ["amazon.com", ["Amazon"]],
+  ["pki.goog", ["Google Trust Services", "GTS"]],
+  ["google.com", ["Google Trust Services", "GTS"]],
+  ["buypass.com", ["Buypass"]],
+  ["buypass.no", ["Buypass"]],
+  ["entrust.net", ["Entrust"]],
+  ["ssl.com", ["SSL.com", "SSL Corp"]],
+  ["certum.pl", ["Certum", "Asseco", "Unizeto"]],
+]);
 
 function parentZone(name: string): string | undefined {
   const idx = name.indexOf(".");
@@ -63,7 +66,7 @@ export function issuerMatchesTag(
 ): { matched: boolean; known: boolean } {
   const cleaned = tag.trim().split(";")[0]?.trim().toLowerCase() ?? "";
   if (cleaned === "") return { matched: false, known: true };
-  const aliases = CA_TAG_MAP[cleaned];
+  const aliases = CA_TAG_MAP.get(cleaned);
   if (!aliases) return { matched: false, known: false };
   const lower = issuer.toLowerCase();
   for (const alias of aliases) {
@@ -85,7 +88,7 @@ export async function runCaaCheck(
   } catch (e) {
     return {
       ok: false,
-      errors: [`CAA lookup: ${(e as Error).message}`],
+      errors: [`CAA lookup: ${errorMessage(e)}`],
       records: [],
     };
   }
@@ -102,17 +105,16 @@ export async function runCaaCheck(
   let issuer = "";
   let isWild = false;
   try {
-    const r = await tls.handshake({
+    using r = await tls.handshake({
       address: hostname,
       servername: hostname,
       timeoutMs: opts.timeoutMs,
     });
-    r.socket.destroy();
     issuer = certIssuerString(r.leaf);
     const subj = certSubjectCN(r.leaf);
     isWild = subj.startsWith("*.");
   } catch (e) {
-    errors.push(`TLS handshake: ${(e as Error).message}`);
+    errors.push(`TLS handshake: ${errorMessage(e)}`);
     return { ok: false, errors, records: recordList };
   }
 

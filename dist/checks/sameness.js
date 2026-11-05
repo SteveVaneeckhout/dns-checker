@@ -1,14 +1,9 @@
 import { createHash } from "node:crypto";
+import { stringRecords } from "../net/records.js";
+import { errorMessage } from "../util/errors.js";
 import { jaccardShingleSimilarity } from "../util/similarity.js";
 async function firstAddress(dns, type, name) {
-    const packet = await dns.query({ type, name });
-    const answers = packet.answers ?? [];
-    for (const a of answers) {
-        if (a.type === type && typeof a.data === "string") {
-            return a.data;
-        }
-    }
-    return undefined;
+    return (await stringRecords(dns, type, name))[0];
 }
 async function fetchResponse(http, address, servername, url, timeoutMs, bodyLimit) {
     return http.get({ address, servername, url, timeoutMs, bodyLimit });
@@ -23,11 +18,11 @@ export async function runSamenessCheck(hostname, opts, dns, http) {
     const errors = [];
     const [v4, v6] = await Promise.all([
         firstAddress(dns, "A", hostname).catch((e) => {
-            errors.push(`A lookup: ${e.message}`);
+            errors.push(`A lookup: ${errorMessage(e)}`);
             return undefined;
         }),
         firstAddress(dns, "AAAA", hostname).catch((e) => {
-            errors.push(`AAAA lookup: ${e.message}`);
+            errors.push(`AAAA lookup: ${errorMessage(e)}`);
             return undefined;
         }),
     ]);
@@ -54,13 +49,13 @@ export async function runSamenessCheck(hostname, opts, dns, http) {
         ipv4Res = await fetchResponse(http, v4, hostname, opts.url, opts.timeoutMs, opts.bodyHashLimit);
     }
     catch (e) {
-        errors.push(`ipv4 fetch: ${e.message}`);
+        errors.push(`ipv4 fetch: ${errorMessage(e)}`);
     }
     try {
         ipv6Res = await fetchResponse(http, v6, hostname, opts.url, opts.timeoutMs, opts.bodyHashLimit);
     }
     catch (e) {
-        errors.push(`ipv6 fetch: ${e.message}`);
+        errors.push(`ipv6 fetch: ${errorMessage(e)}`);
     }
     const result = {
         ok: false,

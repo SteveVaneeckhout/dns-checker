@@ -1,17 +1,7 @@
 import type { DnsTransport } from "../net/dns.js";
+import { stringRecords } from "../net/records.js";
 import type { FamilyResult, NameserverEntry, NameserverResult, ResolvedOptions } from "../types.js";
-
-async function resolveNamesAt(dns: DnsTransport, name: string): Promise<string[]> {
-  const packet = await dns.query({ type: "NS", name });
-  const answers = packet.answers ?? [];
-  const out: string[] = [];
-  for (const a of answers) {
-    if (a.type === "NS" && typeof (a as { data?: unknown }).data === "string") {
-      out.push((a as unknown as { data: string }).data);
-    }
-  }
-  return out;
-}
+import { errorMessage } from "../util/errors.js";
 
 async function resolveApexNs(
   dns: DnsTransport,
@@ -19,29 +9,13 @@ async function resolveApexNs(
 ): Promise<{ apex: string; names: string[] }> {
   let cur: string | undefined = hostname;
   while (cur) {
-    const names = await resolveNamesAt(dns, cur);
+    const names = await stringRecords(dns, "NS", cur);
     if (names.length > 0) return { apex: cur, names };
     const idx = cur.indexOf(".");
     if (idx === -1) break;
     cur = cur.slice(idx + 1);
   }
   return { apex: hostname, names: [] };
-}
-
-async function resolveAddrs(
-  dns: DnsTransport,
-  type: "A" | "AAAA",
-  name: string,
-): Promise<string[]> {
-  const packet = await dns.query({ type, name });
-  const answers = packet.answers ?? [];
-  const out: string[] = [];
-  for (const a of answers) {
-    if (a.type === type && typeof (a as { data?: unknown }).data === "string") {
-      out.push((a as unknown as { data: string }).data);
-    }
-  }
-  return out;
 }
 
 async function probeNs(
@@ -72,7 +46,7 @@ async function probeFamily(
   timeoutMs: number,
 ): Promise<FamilyResult> {
   try {
-    const addresses = await resolveAddrs(dns, type, nsName);
+    const addresses = await stringRecords(dns, type, nsName);
     if (addresses.length === 0) {
       return { addresses: [], reachable: false, error: "no address records" };
     }
@@ -85,7 +59,7 @@ async function probeFamily(
     }
     return { addresses, reachable };
   } catch (e) {
-    return { addresses: [], reachable: false, error: (e as Error).message };
+    return { addresses: [], reachable: false, error: errorMessage(e) };
   }
 }
 
@@ -101,7 +75,7 @@ export async function runNameserverCheck(
   } catch (e) {
     return {
       ok: false,
-      errors: [`NS query failed: ${(e as Error).message}`],
+      errors: [`NS query failed: ${errorMessage(e)}`],
       nameservers: [],
     };
   }

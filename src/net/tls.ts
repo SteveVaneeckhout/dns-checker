@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import tls from "node:tls";
 import type { TLSSocket, PeerCertificate, DetailedPeerCertificate } from "node:tls";
 
@@ -9,7 +10,11 @@ export interface TlsHandshakeOptions {
   rejectUnauthorized?: boolean;
 }
 
-export interface TlsHandshakeResult {
+/**
+ * A completed handshake. The socket stays open so callers can inspect it; dispose the
+ * result (`using r = await tls.handshake(...)`) to close it.
+ */
+export interface TlsHandshakeResult extends Disposable {
   authorized: boolean;
   authorizationError?: string;
   leaf: DetailedPeerCertificate;
@@ -37,53 +42,44 @@ export function collectChain(leaf: DetailedPeerCertificate): DetailedPeerCertifi
 
 export function createTlsTransport(): TlsTransport {
   return {
-    handshake(opts) {
-      return new Promise((resolve, reject) => {
-        let settled = false;
-        const port = opts.port ?? 443;
-        const timeoutMs = opts.timeoutMs ?? 5000;
-        const socket = tls.connect({
-          host: opts.address,
-          port,
-          servername: opts.servername,
-          rejectUnauthorized: opts.rejectUnauthorized ?? false,
-          ALPNProtocols: ["http/1.1"],
-        });
-        const timer = setTimeout(() => {
-          if (settled) return;
-          settled = true;
-          socket.destroy();
-          reject(new Error(`TLS handshake timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-        socket.once("secureConnect", () => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          const leaf = socket.getPeerCertificate(true) as DetailedPeerCertificate;
-          if (!leaf || Object.keys(leaf).length === 0) {
-            socket.destroy();
-            reject(new Error("no peer certificate"));
-            return;
-          }
-          const result: TlsHandshakeResult = {
-            authorized: socket.authorized,
-            leaf,
-            chain: collectChain(leaf),
-            socket,
-          };
-          if (socket.authorizationError) {
-            result.authorizationError = String(socket.authorizationError);
-          }
-          resolve(result);
-        });
-        socket.once("error", (err) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          socket.destroy();
-          reject(err);
-        });
+    async handshake(opts) {
+      const port = opts.port ?? 443;
+      const timeoutMs = opts.timeoutMs ?? 5000;
+      const signal = AbortSignal.timeout(timeoutMs);
+      const socket = tls.connect({
+        host: opts.address,
+        port,
+        servername: opts.servername,
+        rejectUnauthorized: opts.rejectUnauthorized ?? false,
+        ALPNProtocols: ["http/1.1"],
       });
+      try {
+        await once(socket, "secureConnect", { signal });
+      } catch (err) {
+        socket.destroy();
+        if (signal.aborted) throw new Error(`TLS handshake timed out after ${timeoutMs}ms`);
+        throw err;
+      }
+      // The socket outlives this call; keep a late reset from becoming an uncaught "error".
+      socket.on("error", () => {});
+      const leaf = socket.getPeerCertificate(true) as DetailedPeerCertificate;
+      if (!leaf || Object.keys(leaf).length === 0) {
+        socket.destroy();
+        throw new Error("no peer certificate");
+      }
+      const result: TlsHandshakeResult = {
+        authorized: socket.authorized,
+        leaf,
+        chain: collectChain(leaf),
+        socket,
+        [Symbol.dispose]() {
+          socket.destroy();
+        },
+      };
+      if (socket.authorizationError) {
+        result.authorizationError = String(socket.authorizationError);
+      }
+      return result;
     },
   };
 }

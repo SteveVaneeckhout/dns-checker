@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import { generateKeyPairSync, KeyObject, sign as cryptoSign } from "node:crypto";
 import type { Answer, DnskeyData, RrsigData } from "dns-packet";
 import { describe, expect, it } from "vitest";
-import { computeKeyTag, encodeDnskeyRdata, rrsigSigningInput } from "../../src/dnssec/canonical.ts";
+import { computeKeyTag, rrsigSigningInput } from "../../src/dnssec/canonical.ts";
 import { verifyRrsig } from "../../src/dnssec/verify.ts";
 
 function publicJwk(key: KeyObject): Record<string, string> {

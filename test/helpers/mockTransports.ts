@@ -107,5 +107,8 @@ export function fakeHandshake(
     leaf: cert,
     chain,
     socket: noopSocket,
+    [Symbol.dispose]() {
+      noopSocket.destroy();
+    },
   };
 }
