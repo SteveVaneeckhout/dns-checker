@@ -1,4 +1,4 @@
-import { certIssuerString, certSubjectCN } from "../net/tls.js";
+import { certIssuerString, certSubjectAltNames, certSubjectCN } from "../net/tls.js";
 import { errorMessage } from "../util/errors.js";
 /**
  * Certificate authorities: the CAA issuer-domain-names each one publishes (CCADB "CAA
@@ -116,11 +116,55 @@ export function issuerMatchesTag(issuer, tag) {
     }
     return { matched: false, known: true };
 }
+/**
+ * The certificate name that covers `hostname`, and where its CAA search starts (RFC 8659 §3):
+ * at the hostname for an exact name, at the parent for a `*.parent` wildcard. Uses the DNS
+ * subjectAltNames, or the subject CN when the certificate has none. An exact name wins over a
+ * wildcard, because a CA checks each name in the certificate on its own. Undefined when no name
+ * covers the hostname.
+ */
+export function coveringName(hostname, sans, subjectCN) {
+    const host = hostname.toLowerCase().replace(/\.$/, "");
+    const names = (sans.length > 0 ? sans : [subjectCN]).map((n) => n.toLowerCase().replace(/\.$/, ""));
+    if (names.includes(host))
+        return { wildcard: false, lookupFrom: host };
+    const parent = parentZone(host);
+    if (parent !== undefined && names.includes(`*.${parent}`)) {
+        return { wildcard: true, lookupFrom: parent };
+    }
+    return undefined;
+}
 export async function runCaaCheck(hostname, opts, dns, tls) {
     const errors = [];
+    // The certificate comes first: it decides where the CAA search starts.
+    let issuer = "";
+    let isWild = false;
+    let lookupFrom = hostname;
+    let tlsError;
+    try {
+        using r = await tls.handshake({
+            address: hostname,
+            servername: hostname,
+            timeoutMs: opts.timeoutMs,
+        });
+        issuer = certIssuerString(r.leaf);
+        const subjectCN = certSubjectCN(r.leaf);
+        const covering = coveringName(hostname, certSubjectAltNames(r.leaf), subjectCN);
+        if (covering !== undefined) {
+            isWild = covering.wildcard;
+            lookupFrom = covering.lookupFrom;
+        }
+        else {
+            isWild = subjectCN.startsWith("*.");
+            errors.push(`certificate names do not cover ${hostname}; CAA checked from ${hostname} as a ${isWild ? "wildcard" : "non-wildcard"} certificate (subject CN)`);
+        }
+    }
+    catch (e) {
+        tlsError = `TLS handshake: ${errorMessage(e)}`;
+    }
     let caa;
     try {
-        caa = await findCaaRecords(dns, hostname);
+        caa = await findCaaRecords(dns, lookupFrom);
     }
     catch (e) {
         return {
@@ -138,21 +182,8 @@ export async function runCaaCheck(hostname, opts, dns, tls) {
     if (recordList.length === 0) {
         return { ok: true, errors: [], records: [] };
     }
-    let issuer = "";
-    let isWild = false;
-    try {
-        using r = await tls.handshake({
-            address: hostname,
-            servername: hostname,
-            timeoutMs: opts.timeoutMs,
-        });
-        issuer = certIssuerString(r.leaf);
-        const subj = certSubjectCN(r.leaf);
-        isWild = subj.startsWith("*.");
-    }
-    catch (e) {
-        errors.push(`TLS handshake: ${errorMessage(e)}`);
-        return { ok: false, errors, records: recordList };
+    if (tlsError !== undefined) {
+        return { ok: false, errors: [tlsError], records: recordList };
     }
     // RFC 8659 §4.1: tags match case-insensitively. §4.3: for a wildcard certificate, issuewild
     // properties, when there are any, replace the issue properties entirely.

@@ -141,20 +141,30 @@ Older algorithms (5/7 RSA/SHA-1) are explicitly not supported.
 
 ### CAA
 
-The check picks the CAA records that apply to the served certificate, following
-RFC 8659:
+The check first finds the certificate name that covers the hostname, using the
+certificate's DNS subjectAltNames (or the subject CN when it has none). An exact
+name wins over a wildcard:
+
+- **Exact name** (`www.example.com` for `www.example.com`): the CAA search
+  starts at the hostname and walks up.
+- **Wildcard** (`*.example.com` for `www.example.com`): the search starts at
+  the parent, `example.com`, as the CA's did (RFC 8659 §3). CAA records on
+  `www.example.com` itself don't apply.
+- **No covering name**: the check falls back to the subject CN, searches from
+  the hostname, and adds an error saying so.
+
+It then picks the CAA records that apply, following RFC 8659:
 
 - Tags match case-insensitively, so `Issue` and `ISSUEWILD` count.
-- A non-wildcard certificate is checked against the `issue` records only.
-- A wildcard certificate (`*.` subject) is checked against the `issuewild`
-  records when there are any, and those replace `issue` entirely: with
-  `issue "letsencrypt.org"` and `issuewild ";"`, a wildcard certificate from
-  Let's Encrypt is **not** permitted. Without `issuewild`, `issue` applies.
-- When no record applies (for example only `iodef`, or only `issuewild` for a
-  non-wildcard certificate), CAA does not restrict issuance and the check
-  passes.
+- An exact name is checked against the `issue` records only.
+- A wildcard name is checked against the `issuewild` records when there are
+  any, and those replace `issue` entirely: with `issue "letsencrypt.org"` and
+  `issuewild ";"`, a wildcard certificate from Let's Encrypt is **not**
+  permitted. Without `issuewild`, `issue` applies.
+- When no record applies (for example only `iodef`, or only `issuewild` for an
+  exact name), CAA does not restrict issuance and the check passes.
 
-It then maps each applicable CAA identifier to the CA that publishes it and
+Finally it maps each applicable CAA identifier to the CA that publishes it and
 looks for that CA in the certificate issuer. The built-in table covers the CAA
 identifiers of about 35 CAs, including every identifier a CA publishes (for
 example `amazon.com`, `amazontrust.com`, `awstrust.com` and `amazonaws.com` for

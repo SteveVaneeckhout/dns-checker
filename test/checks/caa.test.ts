@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { issuerMatchesTag, runCaaCheck } from "../../src/checks/caa.ts";
+import { coveringName, issuerMatchesTag, runCaaCheck } from "../../src/checks/caa.ts";
 import { resolveOptions } from "../../src/options.ts";
 import {
   fakeCert,
@@ -188,7 +188,7 @@ describe("runCaaCheck", () => {
         fakeCert({
           issuerO: "Let's Encrypt",
           issuerCN: "R3",
-          subjectCN: "*.host.test",
+          subjectCN: "*.test",
         }),
       ),
     );
@@ -233,7 +233,7 @@ describe("runCaaCheck", () => {
           { tag: "issue", value: "letsencrypt.org" },
           { tag: "issuewild", value: ";" },
         ],
-        "*.host.test",
+        "*.test",
       );
       expect(r.ok).toBe(false);
       expect(r.errors.join(" ")).toMatch(/not permitted/);
@@ -245,13 +245,13 @@ describe("runCaaCheck", () => {
           { tag: "issue", value: "letsencrypt.org" },
           { tag: "issuewild", value: "digicert.com" },
         ],
-        "*.host.test",
+        "*.test",
       );
       expect(r.ok).toBe(false);
     });
 
     it("falls back to issue for a wildcard certificate without issuewild", async () => {
-      const r = await check([{ tag: "issue", value: "letsencrypt.org" }], "*.host.test");
+      const r = await check([{ tag: "issue", value: "letsencrypt.org" }], "*.test");
       expect(r.ok).toBe(true);
       expect(r.matchedTag).toBe("letsencrypt.org");
     });
@@ -283,7 +283,7 @@ describe("runCaaCheck", () => {
           { tag: "issue", value: "letsencrypt.org" },
           { tag: "IssueWild", value: ";" },
         ],
-        "*.host.test",
+        "*.test",
       );
       expect(wild.ok).toBe(false);
     });
@@ -292,5 +292,140 @@ describe("runCaaCheck", () => {
       const r = await check([{ tag: "Issue", value: "letsencrypt.org" }]);
       expect(r.records[0]?.tag).toBe("Issue");
     });
+  });
+
+  describe("which certificate name covers the hostname", () => {
+    type Rec = { tag: string; value: string };
+    const LE = { issuerO: "Let's Encrypt", issuerCN: "R3" };
+    // example.test allows Let's Encrypt for normal names and nobody for wildcards.
+    const APEX: Rec[] = [
+      { tag: "issue", value: "letsencrypt.org" },
+      { tag: "issuewild", value: ";" },
+    ];
+
+    async function check(
+      hostname: string,
+      zones: Record<string, Rec[]>,
+      cert: { subjectCN?: string; san?: string },
+    ) {
+      const queried: string[] = [];
+      const dns = mockDns((q) => {
+        queried.push(q.name);
+        const recs = q.type === "CAA" ? (zones[q.name] ?? []) : [];
+        return packetWith(recs.map((data) => ({ name: q.name, type: "CAA" as const, data })));
+      });
+      const tls = mockTls(() => fakeHandshake(fakeCert({ ...LE, ...cert })));
+      const r = await runCaaCheck(hostname, opts, dns, tls);
+      return { r, queried };
+    }
+
+    it("checks an apex covered by a non-wildcard name as non-wildcard", async () => {
+      const { r } = await check(
+        "example.test",
+        { "example.test": APEX },
+        { subjectCN: "*.example.test", san: "DNS:*.example.test, DNS:example.test" },
+      );
+      expect(r).toMatchObject({ ok: true, errors: [], matchedTag: "letsencrypt.org" });
+    });
+
+    it("checks a wildcard name that is not the subject CN as a wildcard", async () => {
+      const { r } = await check(
+        "www.example.test",
+        { "example.test": APEX },
+        { subjectCN: "example.test", san: "DNS:example.test, DNS:*.example.test" },
+      );
+      expect(r.ok).toBe(false);
+      expect(r.errors.join(" ")).toMatch(/not permitted/);
+    });
+
+    it("checks a wildcard certificate without a subject CN as a wildcard", async () => {
+      const { r } = await check(
+        "www.example.test",
+        { "example.test": APEX },
+        { subjectCN: "", san: "DNS:*.example.test" },
+      );
+      expect(r.ok).toBe(false);
+    });
+
+    it("starts the search at the parent for a wildcard, past the hostname's own records", async () => {
+      const { r, queried } = await check(
+        "www.example.test",
+        { "www.example.test": [{ tag: "issue", value: "letsencrypt.org" }], "example.test": APEX },
+        { subjectCN: "*.example.test", san: "DNS:*.example.test" },
+      );
+      expect(queried[0]).toBe("example.test");
+      expect(r.records[0]?.zone).toBe("example.test");
+      expect(r.ok).toBe(false);
+    });
+
+    it("starts the search at the hostname for an exact name", async () => {
+      const { r } = await check(
+        "www.example.test",
+        { "www.example.test": [{ tag: "issue", value: "letsencrypt.org" }], "example.test": APEX },
+        { subjectCN: "www.example.test", san: "DNS:www.example.test, DNS:*.example.test" },
+      );
+      expect(r.records[0]?.zone).toBe("www.example.test");
+      expect(r.ok).toBe(true);
+    });
+
+    it("falls back to the subject CN and says so when no name covers the hostname", async () => {
+      const { r } = await check(
+        "other.test",
+        { "other.test": [{ tag: "issue", value: "letsencrypt.org" }] },
+        { subjectCN: "*.example.test", san: "DNS:*.example.test" },
+      );
+      expect(r.ok).toBe(true);
+      expect(r.errors).toEqual([
+        "certificate names do not cover other.test; CAA checked from other.test as a wildcard certificate (subject CN)",
+      ]);
+      const plain = await check(
+        "other.test",
+        { "other.test": [{ tag: "issue", value: "letsencrypt.org" }] },
+        { subjectCN: "example.test", san: "DNS:example.test" },
+      );
+      expect(plain.r.errors[0]).toMatch(/as a non-wildcard certificate/);
+    });
+
+    it("passes without a handshake error when there are no CAA records", async () => {
+      const dns = mockDns(() => packetWith([]));
+      const tls = mockTls(() => {
+        throw new Error("tls boom");
+      });
+      const r = await runCaaCheck("host.test", opts, dns, tls);
+      expect(r).toEqual({ ok: true, errors: [], records: [] });
+    });
+  });
+});
+
+describe("coveringName", () => {
+  it("prefers an exact name over a wildcard", () => {
+    expect(coveringName("a.example.test", ["*.example.test", "a.example.test"], "")).toEqual({
+      wildcard: false,
+      lookupFrom: "a.example.test",
+    });
+  });
+  it("matches a wildcard one label deep only", () => {
+    expect(coveringName("a.example.test", ["*.example.test"], "")).toEqual({
+      wildcard: true,
+      lookupFrom: "example.test",
+    });
+    expect(coveringName("a.b.example.test", ["*.example.test"], "")).toBeUndefined();
+    expect(coveringName("example.test", ["*.example.test"], "")).toBeUndefined();
+  });
+  it("uses the subject CN only when there are no subjectAltNames", () => {
+    expect(coveringName("example.test", [], "example.test")).toEqual({
+      wildcard: false,
+      lookupFrom: "example.test",
+    });
+    expect(coveringName("example.test", ["other.test"], "example.test")).toBeUndefined();
+  });
+  it("ignores case and a trailing dot", () => {
+    expect(coveringName("WWW.Example.Test.", ["*.EXAMPLE.test"], "")).toEqual({
+      wildcard: true,
+      lookupFrom: "example.test",
+    });
+  });
+  it("does not match a single-label hostname against a wildcard", () => {
+    expect(coveringName("localhost", ["*.localhost"], "")).toBeUndefined();
   });
 });
