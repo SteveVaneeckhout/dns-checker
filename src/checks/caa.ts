@@ -5,26 +5,83 @@ import { certIssuerString, certSubjectCN } from "../net/tls.js";
 import type { CaaRecord, CaaResult, ResolvedOptions } from "../types.js";
 import { errorMessage } from "../util/errors.js";
 
+/**
+ * Certificate authorities: the CAA issuer-domain-names each one publishes (CCADB "CAA
+ * identifiers"), and substrings of the certificate issuer that identify its certificates. A CA
+ * honours all of its identifiers for every certificate it issues, including the ones it issues
+ * under a brand or reseller name (ZeroSSL, GoGetSSL, … for Sectigo; GeoTrust, RapidSSL, … for
+ * DigiCert).
+ */
+const CERTIFICATE_AUTHORITIES: readonly { ids: readonly string[]; issuers: readonly string[] }[] = [
+  { ids: ["letsencrypt.org"], issuers: ["Let's Encrypt"] },
+  { ids: ["pki.goog", "google.com"], issuers: ["Google Trust Services", "GTS"] },
+  {
+    ids: ["amazon.com", "amazontrust.com", "awstrust.com", "amazonaws.com"],
+    issuers: ["Amazon"],
+  },
+  {
+    ids: [
+      "digicert.com",
+      "www.digicert.com",
+      "digicert.ne.jp",
+      "digitalcertvalidation.com",
+      "geotrust.com",
+      "rapidssl.com",
+      "thawte.com",
+      "symantec.com",
+      "quovadisglobal.com",
+    ],
+    issuers: ["DigiCert", "GeoTrust", "RapidSSL", "Thawte", "Symantec", "QuoVadis"],
+  },
+  {
+    ids: ["sectigo.com", "comodoca.com", "comodo.com", "usertrust.com", "trust-provider.com"],
+    issuers: [
+      "Sectigo",
+      "Comodo",
+      "USERTrust",
+      "ZeroSSL",
+      "GoGetSSL",
+      "Gandi",
+      "InCommon",
+      "cPanel",
+    ],
+  },
+  { ids: ["globalsign.com"], issuers: ["GlobalSign"] },
+  { ids: ["godaddy.com", "starfieldtech.com"], issuers: ["GoDaddy", "Go Daddy", "Starfield"] },
+  { ids: ["buypass.com", "buypass.no"], issuers: ["Buypass"] },
+  { ids: ["entrust.net", "affirmtrust.com"], issuers: ["Entrust", "AffirmTrust"] },
+  { ids: ["ssl.com"], issuers: ["SSL.com", "SSL Corp"] },
+  { ids: ["certum.pl"], issuers: ["Certum", "Asseco", "Unizeto"] },
+  { ids: ["harica.gr"], issuers: ["HARICA", "Hellenic Academic"] },
+  { ids: ["certainly.com"], issuers: ["Certainly"] },
+  { ids: ["swisssign.com"], issuers: ["SwissSign"] },
+  { ids: ["microsoft.com"], issuers: ["Microsoft"] },
+  { ids: ["identrust.com"], issuers: ["IdenTrust"] },
+  { ids: ["emsign.com"], issuers: ["eMudhra", "emSign"] },
+  { ids: ["telesec.de"], issuers: ["T-Systems", "TeleSec", "Telekom Security"] },
+  { ids: ["d-trust.net"], issuers: ["D-Trust"] },
+  { ids: ["certsign.ro"], issuers: ["certSIGN"] },
+  { ids: ["actalis.it"], issuers: ["Actalis"] },
+  { ids: ["certigna.fr"], issuers: ["Certigna", "Dhimyotis"] },
+  { ids: ["trustwave.com", "securetrust.com"], issuers: ["Trustwave", "SecureTrust"] },
+  { ids: ["twca.com.tw"], issuers: ["TAIWAN-CA", "TWCA"] },
+  { ids: ["pki.apple.com"], issuers: ["Apple"] },
+  { ids: ["e-szigno.hu"], issuers: ["Microsec", "e-Szigno"] },
+  { ids: ["infocert.it"], issuers: ["InfoCert"] },
+  { ids: ["cybertrust.ne.jp"], issuers: ["Cybertrust Japan"] },
+  { ids: ["telia.com"], issuers: ["Telia"] },
+  { ids: ["trustasia.com"], issuers: ["TrustAsia"] },
+  { ids: ["jprs.jp"], issuers: ["JPRS", "Japan Registry Services"] },
+  { ids: ["secomtrust.net"], issuers: ["SECOM"] },
+  { ids: ["fnmt.es"], issuers: ["FNMT"] },
+  { ids: ["firmaprofesional.com"], issuers: ["Firmaprofesional"] },
+];
+
 // A Map, not an object literal: CAA tags come from DNS, and names like "constructor"
 // must not resolve to inherited Object.prototype members.
-const CA_TAG_MAP: ReadonlyMap<string, readonly string[]> = new Map([
-  ["letsencrypt.org", ["Let's Encrypt"]],
-  ["digicert.com", ["DigiCert"]],
-  ["sectigo.com", ["Sectigo", "Comodo", "ZeroSSL"]],
-  ["comodoca.com", ["Sectigo", "Comodo"]],
-  ["globalsign.com", ["GlobalSign"]],
-  ["godaddy.com", ["GoDaddy", "Go Daddy", "Starfield"]],
-  ["starfieldtech.com", ["Starfield"]],
-  ["amazontrust.com", ["Amazon"]],
-  ["amazon.com", ["Amazon"]],
-  ["pki.goog", ["Google Trust Services", "GTS"]],
-  ["google.com", ["Google Trust Services", "GTS"]],
-  ["buypass.com", ["Buypass"]],
-  ["buypass.no", ["Buypass"]],
-  ["entrust.net", ["Entrust"]],
-  ["ssl.com", ["SSL.com", "SSL Corp"]],
-  ["certum.pl", ["Certum", "Asseco", "Unizeto"]],
-]);
+const CA_TAG_MAP: ReadonlyMap<string, readonly string[]> = new Map(
+  CERTIFICATE_AUTHORITIES.flatMap(({ ids, issuers }) => ids.map((id) => [id, issuers] as const)),
+);
 
 function parentZone(name: string): string | undefined {
   const idx = name.indexOf(".");

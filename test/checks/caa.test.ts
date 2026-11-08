@@ -33,6 +33,33 @@ describe("issuerMatchesTag", () => {
   it("returns matched=false when value is empty after parsing", () => {
     expect(issuerMatchesTag("issuer", ";policy=value")).toEqual({ matched: false, known: true });
   });
+  it.each([
+    ["amazonaws.com", "O=Amazon, CN=Amazon RSA 2048 M04"],
+    ["awstrust.com", "O=Amazon, CN=Amazon RSA 2048 M04"],
+    ["www.digicert.com", "O=DigiCert Inc, CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1"],
+    ["geotrust.com", "O=DigiCert Inc, CN=GeoTrust TLS RSA CA G1"],
+    ["digicert.com", "O=DigiCert, Inc., CN=GeoTrust G2 TLS CN RSA4096 SHA256 2022 CA1"],
+    ["usertrust.com", "O=Sectigo Limited, CN=Sectigo Public Server Authentication CA DV R36"],
+    ["trust-provider.com", "O=ZeroSSL GmbH, CN=ZeroSSL ECC DV SSL CA 2"],
+    ["sectigo.com", "O=GoGetSSL, CN=GoGetSSL RSA DV SSL CA 2"],
+    ["comodo.com", "O=Internet2, CN=InCommon RSA Server CA 2"],
+    ["starfieldtech.com", "O=GoDaddy.com, Inc., CN=Go Daddy Secure Certificate Authority - G2"],
+    ["harica.gr", "O=Hellenic Academic and Research Institutions CA, CN=GEANT TLS RSA 1"],
+    ["certainly.com", "O=Certainly, CN=Certainly Intermediate R1"],
+    ["WWW.DigiCert.com", "O=DigiCert Inc, CN=RapidSSL TLS RSA CA G1"],
+  ])("knows the CAA identifier %j and matches its issuer %j", (tag, issuer) => {
+    expect(issuerMatchesTag(issuer, tag)).toEqual({ matched: true, known: true });
+  });
+  it("does not let one CA's identifier match another CA's certificate", () => {
+    expect(issuerMatchesTag("O=Amazon, CN=Amazon RSA 2048 M04", "harica.gr")).toEqual({
+      matched: false,
+      known: true,
+    });
+    expect(issuerMatchesTag("O=Let's Encrypt, CN=R3", "usertrust.com")).toEqual({
+      matched: false,
+      known: true,
+    });
+  });
   it.each(["constructor", "__proto__", "toString", "hasOwnProperty"])(
     "treats the Object.prototype name %j as an unknown CA tag instead of crashing",
     (tag) => {

@@ -154,13 +154,15 @@ RFC 8659:
   non-wildcard certificate), CAA does not restrict issuance and the check
   passes.
 
-The check then maps a small set of well-known CA tags (`letsencrypt.org`,
-`digicert.com`, `sectigo.com`, `globalsign.com`, `godaddy.com`, `pki.goog`,
-`amazon(trust).com`, `buypass.com`, `entrust.net`, `ssl.com`, `certum.pl`, etc.)
-to issuer-organization substrings and looks for a match. **Unknown CA tags
-produce a clear error rather than silently passing** — that way a CAA policy
-referring to a CA the library doesn't know about is surfaced as a configuration
-warning, not silently treated as success.
+It then maps each applicable CAA identifier to the CA that publishes it and
+looks for that CA in the certificate issuer. The built-in table covers the CAA
+identifiers of about 35 CAs, including every identifier a CA publishes (for
+example `amazon.com`, `amazontrust.com`, `awstrust.com` and `amazonaws.com` for
+Amazon) and the brand and reseller names its certificates carry (GeoTrust,
+RapidSSL, Thawte for DigiCert; ZeroSSL, GoGetSSL, InCommon for Sectigo).
+**Unknown CA tags produce a clear error rather than silently passing** — that
+way a CAA policy referring to a CA the library doesn't know about is surfaced
+as a configuration warning, not silently treated as success.
 
 ## Limitations / non-goals (v1)
 
