@@ -100,10 +100,14 @@ export async function runCaaCheck(hostname, opts, dns, tls) {
         errors.push(`TLS handshake: ${errorMessage(e)}`);
         return { ok: false, errors, records: recordList };
     }
-    const relevant = recordList.filter((r) => isWild ? r.tag === "issuewild" || r.tag === "issue" : r.tag === "issue");
+    // RFC 8659 §4.1: tags match case-insensitively. §4.3: for a wildcard certificate, issuewild
+    // properties, when there are any, replace the issue properties entirely.
+    const byTag = (tag) => recordList.filter((r) => r.tag.toLowerCase() === tag);
+    const issuewild = isWild ? byTag("issuewild") : [];
+    const relevant = issuewild.length > 0 ? issuewild : byTag("issue");
     if (relevant.length === 0) {
-        errors.push("no applicable issue/issuewild directive");
-        return { ok: false, errors, records: recordList, certIssuer: issuer };
+        // §4.2: without an applicable issue property, CAA does not restrict issuance.
+        return { ok: true, errors, records: recordList, certIssuer: issuer };
     }
     for (const rec of relevant) {
         const m = issuerMatchesTag(issuer, rec.value);

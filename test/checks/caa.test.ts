@@ -186,20 +186,84 @@ describe("runCaaCheck", () => {
     expect(r.errors.join(" ")).toMatch(/unknown CA tag/);
   });
 
-  it("reports no applicable issue when only iodef present", async () => {
-    const dns = mockDns((q) =>
-      q.type === "CAA"
-        ? packetWith([
-            {
-              name: q.name,
-              type: "CAA",
-              data: { tag: "iodef", value: "mailto:abuse@example.test" },
-            },
-          ])
-        : packetWith([]),
-    );
-    const tls = mockTls(() => fakeHandshake(fakeCert()));
-    const r = await runCaaCheck("host.test", opts, dns, tls);
-    expect(r.errors.join(" ")).toMatch(/no applicable/);
+  describe("RFC 8659 issue/issuewild selection", () => {
+    type Rec = { tag: string; value: string; flags?: number };
+    const LE = { issuerO: "Let's Encrypt", issuerCN: "R3" };
+
+    async function check(records: Rec[], subjectCN = "host.test", cert = LE) {
+      const dns = mockDns((q) =>
+        q.type === "CAA"
+          ? packetWith(records.map((data) => ({ name: q.name, type: "CAA" as const, data })))
+          : packetWith([]),
+      );
+      const tls = mockTls(() => fakeHandshake(fakeCert({ ...cert, subjectCN })));
+      return runCaaCheck("host.test", opts, dns, tls);
+    }
+
+    it("lets issuewild forbid a wildcard certificate that issue would allow", async () => {
+      const r = await check(
+        [
+          { tag: "issue", value: "letsencrypt.org" },
+          { tag: "issuewild", value: ";" },
+        ],
+        "*.host.test",
+      );
+      expect(r.ok).toBe(false);
+      expect(r.errors.join(" ")).toMatch(/not permitted/);
+    });
+
+    it("checks a wildcard certificate against issuewild only, when there is one", async () => {
+      const r = await check(
+        [
+          { tag: "issue", value: "letsencrypt.org" },
+          { tag: "issuewild", value: "digicert.com" },
+        ],
+        "*.host.test",
+      );
+      expect(r.ok).toBe(false);
+    });
+
+    it("falls back to issue for a wildcard certificate without issuewild", async () => {
+      const r = await check([{ tag: "issue", value: "letsencrypt.org" }], "*.host.test");
+      expect(r.ok).toBe(true);
+      expect(r.matchedTag).toBe("letsencrypt.org");
+    });
+
+    it("ignores issuewild for a non-wildcard certificate", async () => {
+      const r = await check([
+        { tag: "issue", value: "digicert.com" },
+        { tag: "issuewild", value: "letsencrypt.org" },
+      ]);
+      expect(r.ok).toBe(false);
+    });
+
+    it("does not restrict issuance when there is no issue property (only iodef)", async () => {
+      const r = await check([{ tag: "iodef", value: "mailto:abuse@example.test" }]);
+      expect(r).toMatchObject({ ok: true, errors: [] });
+      expect(r.records).toHaveLength(1);
+    });
+
+    it("does not restrict a non-wildcard certificate when there is only issuewild", async () => {
+      const r = await check([{ tag: "issuewild", value: "digicert.com" }]);
+      expect(r).toMatchObject({ ok: true, errors: [] });
+    });
+
+    it("matches tags case-insensitively", async () => {
+      expect((await check([{ tag: "Issue", value: "digicert.com" }])).ok).toBe(false);
+      expect((await check([{ tag: "ISSUE", value: "letsencrypt.org" }])).ok).toBe(true);
+      const wild = await check(
+        [
+          { tag: "issue", value: "letsencrypt.org" },
+          { tag: "IssueWild", value: ";" },
+        ],
+        "*.host.test",
+      );
+      expect(wild.ok).toBe(false);
+    });
+
+    it("keeps the tag as published in the returned records", async () => {
+      const r = await check([{ tag: "Issue", value: "letsencrypt.org" }]);
+      expect(r.records[0]?.tag).toBe("Issue");
+    });
   });
 });

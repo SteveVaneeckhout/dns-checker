@@ -141,7 +141,20 @@ Older algorithms (5/7 RSA/SHA-1) are explicitly not supported.
 
 ### CAA
 
-The check maps a small set of well-known CA tags (`letsencrypt.org`,
+The check picks the CAA records that apply to the served certificate, following
+RFC 8659:
+
+- Tags match case-insensitively, so `Issue` and `ISSUEWILD` count.
+- A non-wildcard certificate is checked against the `issue` records only.
+- A wildcard certificate (`*.` subject) is checked against the `issuewild`
+  records when there are any, and those replace `issue` entirely: with
+  `issue "letsencrypt.org"` and `issuewild ";"`, a wildcard certificate from
+  Let's Encrypt is **not** permitted. Without `issuewild`, `issue` applies.
+- When no record applies (for example only `iodef`, or only `issuewild` for a
+  non-wildcard certificate), CAA does not restrict issuance and the check
+  passes.
+
+The check then maps a small set of well-known CA tags (`letsencrypt.org`,
 `digicert.com`, `sectigo.com`, `globalsign.com`, `godaddy.com`, `pki.goog`,
 `amazon(trust).com`, `buypass.com`, `entrust.net`, `ssl.com`, `certum.pl`, etc.)
 to issuer-organization substrings and looks for a match. **Unknown CA tags
