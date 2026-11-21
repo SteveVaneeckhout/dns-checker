@@ -7,6 +7,12 @@ export function resolveOptions(hostname, opts) {
     };
     if (opts?.trustAnchors)
         base.trustAnchors = opts.trustAnchors;
+    if (opts?.canonicalUrl !== undefined) {
+        const canonical = URL.parse(opts.canonicalUrl);
+        if (canonical === null)
+            throw new Error(`invalid canonicalUrl: ${opts.canonicalUrl}`);
+        base.canonicalUrl = canonical.href;
+    }
     return base;
 }
 export function normalizeHostname(host) {

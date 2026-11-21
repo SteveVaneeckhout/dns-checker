@@ -24,6 +24,21 @@ describe("resolveOptions", () => {
   });
 });
 
+describe("resolveOptions canonicalUrl", () => {
+  it("is absent by default and normalized when given", () => {
+    expect(resolveOptions("example.com").canonicalUrl).toBeUndefined();
+    expect(
+      resolveOptions("example.com", { canonicalUrl: "HTTPS://WWW.Example.com" }).canonicalUrl,
+    ).toBe("https://www.example.com/");
+  });
+
+  it("throws on an invalid canonicalUrl", () => {
+    expect(() => resolveOptions("example.com", { canonicalUrl: "not a url" })).toThrow(
+      /invalid canonicalUrl/,
+    );
+  });
+});
+
 describe("normalizeHostname", () => {
   it("lowercases, trims, strips trailing dot", () => {
     expect(normalizeHostname("  Example.COM.  ")).toBe("example.com");

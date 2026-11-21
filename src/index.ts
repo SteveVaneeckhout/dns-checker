@@ -3,6 +3,7 @@ import { runDaneCheck } from "./checks/dane.js";
 import { runDnssecCheck } from "./checks/dnssec.js";
 import { runIpCheck } from "./checks/ip.js";
 import { runNameserverCheck } from "./checks/nameservers.js";
+import { runRedirectCheck } from "./checks/redirects.js";
 import { runSamenessCheck } from "./checks/sameness.js";
 import { createDnsTransport, type DnsTransport } from "./net/dns.js";
 import { createHttpTransport, type HttpTransport } from "./net/http.js";
@@ -16,6 +17,7 @@ import type {
   DnssecResult,
   IpResult,
   NameserverResult,
+  RedirectResult,
   SamenessResult,
 } from "./types.js";
 
@@ -107,6 +109,17 @@ export async function checkDane(
   return runDaneCheck(hostname, opts, t.dns, t.tls);
 }
 
+export async function checkRedirects(
+  host: string,
+  options?: CheckOptions,
+  transports?: CheckTransports,
+): Promise<RedirectResult> {
+  const hostname = normalizeHostname(host);
+  const opts = resolveOptions(hostname, options);
+  const t = buildTransports(hostname, opts, transports);
+  return runRedirectCheck(hostname, opts, t.dns, t.http);
+}
+
 export async function checkDomain(
   host: string,
   options?: CheckOptions,
@@ -117,12 +130,13 @@ export async function checkDomain(
   const t = buildTransports(hostname, opts, transports);
   const startedAt = new Date().toISOString();
   const t0 = Date.now();
-  const [ip, nameservers, sameness, dnssec, caa] = await Promise.all([
+  const [ip, nameservers, sameness, dnssec, caa, redirects] = await Promise.all([
     runIpCheck(hostname, opts, t.dns, t.tls),
     runNameserverCheck(hostname, opts, t.dns),
     runSamenessCheck(hostname, opts, t.dns, t.http),
     runDnssecCheck(hostname, opts, t.dns),
     runCaaCheck(hostname, opts, t.dns, t.tls),
+    runRedirectCheck(hostname, opts, t.dns, t.http),
   ]);
   const dane = await runDaneCheck(hostname, opts, t.dns, t.tls, dnssec);
   return {
@@ -135,5 +149,6 @@ export async function checkDomain(
     dnssec,
     caa,
     dane,
+    redirects,
   };
 }

@@ -11,6 +11,11 @@ export interface CheckOptions {
   resolver?: string;
   bodyHashLimit?: number;
   trustAnchors?: readonly RootTrustAnchorRef[];
+  /**
+   * URL every redirect chain must end at, e.g. `https://www.example.com/`. Default: the URL
+   * most chains end at.
+   */
+  canonicalUrl?: string;
 }
 
 export interface ResolvedOptions {
@@ -19,6 +24,7 @@ export interface ResolvedOptions {
   resolver: string;
   bodyHashLimit: number;
   trustAnchors?: readonly RootTrustAnchorRef[];
+  canonicalUrl?: string;
 }
 
 export interface FamilyResult {
@@ -102,6 +108,44 @@ export interface DaneResult {
   matchedRecord?: TlsaRecord;
 }
 
+export interface RedirectHop {
+  url: string;
+  /** IP address the request was sent to. */
+  address: string;
+  status: number;
+  /** The `Location` header, as sent. */
+  location?: string;
+}
+
+export interface RedirectChain {
+  /** One of `http://apex/`, `http://www/`, `https://apex/`, `https://www/`. */
+  startUrl: string;
+  hops: RedirectHop[];
+  /** URL of the last response that was fetched. */
+  finalUrl?: string;
+  finalStatus?: number;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface RedirectFamilyResult {
+  /** False when neither the apex nor the www name has an address in this family. */
+  available: boolean;
+  chains: RedirectChain[];
+}
+
+export interface RedirectResult {
+  ok: boolean;
+  errors: string[];
+  warnings: string[];
+  apex: string;
+  www: string;
+  /** The URL every chain should end at: `canonicalUrl` option, else the most common final URL. */
+  canonicalUrl?: string;
+  ipv4: RedirectFamilyResult;
+  ipv6: RedirectFamilyResult;
+}
+
 export interface CheckResult {
   hostname: string;
   startedAt: string;
@@ -112,4 +156,5 @@ export interface CheckResult {
   dnssec: DnssecResult;
   caa: CaaResult;
   dane: DaneResult;
+  redirects: RedirectResult;
 }

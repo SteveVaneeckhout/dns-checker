@@ -1,4 +1,6 @@
 import { Buffer } from "node:buffer";
+import { once } from "node:events";
+import net, { type AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
 import { createHttpTransport, parseHttpResponse, resolveRedirect } from "../../src/net/http.ts";
 import { startHttpsServer, startTlsServer } from "../helpers/tlsServer.ts";
@@ -84,6 +86,15 @@ describe("parseHttpResponse", () => {
         1024,
       ),
     ).toBeNull();
+  });
+
+  it("truncates a Content-Length body that is longer than bodyLimit", () => {
+    const r = parseHttpResponse(
+      Buffer.from("HTTP/1.1 200 OK\r\nContent-Length: 100000\r\n\r\nhello world", "utf8"),
+      5,
+    );
+    expect(r?.body.toString()).toBe("hello");
+    expect(r?.truncated).toBe(true);
   });
 
   it("returns null when headers are incomplete", () => {
@@ -216,6 +227,43 @@ describe("resolveRedirect", () => {
         "https://example.com/x",
       );
     }
+  });
+});
+
+describe("createHttpTransport (plain HTTP)", () => {
+  it("speaks plain HTTP for an http: URL and does not follow redirects with maxRedirects 0", async () => {
+    let request = "";
+    const server = net.createServer((socket) => {
+      socket.on("error", () => {});
+      socket.once("data", (d: Buffer) => {
+        request = d.toString("latin1");
+        socket.end("HTTP/1.1 301 Moved\r\nLocation: /next\r\nContent-Length: 0\r\n\r\n");
+      });
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const { port } = server.address() as AddressInfo;
+    try {
+      const r = await createHttpTransport().get({
+        address: "127.0.0.1",
+        servername: "localhost",
+        url: `http://localhost:${port}/`,
+        timeoutMs: 2000,
+        maxRedirects: 0,
+      });
+      expect(request).toMatch(/^GET \/ HTTP\/1\.1\r\nHost: localhost\r\n/);
+      expect(r.status).toBe(301);
+      expect(r.headers["location"]).toBe("/next");
+    } finally {
+      server.close();
+      await once(server, "close");
+    }
+  });
+
+  it("rejects a URL scheme other than http or https", async () => {
+    await expect(
+      createHttpTransport().get({ address: "127.0.0.1", servername: "x", url: "ftp://x/" }),
+    ).rejects.toThrow(/unsupported URL scheme: ftp:/);
   });
 });
 

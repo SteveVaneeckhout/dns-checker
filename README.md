@@ -1,6 +1,6 @@
 # dns-checker
 
-A TypeScript / Node.js library that runs seven DNS-related health checks against
+A TypeScript / Node.js library that runs eight DNS-related health checks against
 a website's hostname:
 
 1. Is IPv4 and IPv6 available?
@@ -12,6 +12,8 @@ a website's hostname:
 6. Is there a CAA record and is it valid against the served certificate?
 7. Is there a TLSA record and does the DANE fingerprint match the served
    certificate?
+8. Do `http://` and `https://`, with and without `www`, all redirect correctly
+   to one canonical HTTPS URL?
 
 ESM only. Requires Node `>=26.13.0`.
 
@@ -30,7 +32,7 @@ const result = await checkDomain("example.com");
 console.log(JSON.stringify(result, null, 2));
 ```
 
-`checkDomain` runs all six independent checks in parallel and the DANE check
+`checkDomain` runs all seven independent checks in parallel and the DANE check
 after DNSSEC has been evaluated (DANE requires a valid DNSSEC chain).
 
 ## API
@@ -50,6 +52,7 @@ interface CheckResult {
   dnssec: DnssecResult; // signed + chain validity + chain steps
   caa: CaaResult; // records + cert issuer match
   dane: DaneResult; // TLSA + cert match
+  redirects: RedirectResult; // http/https × apex/www redirect chains, per IP family
 }
 ```
 
@@ -63,6 +66,7 @@ import {
   checkDnssec,
   checkCaa,
   checkDane,
+  checkRedirects,
 } from "dns-checker";
 ```
 
@@ -75,6 +79,7 @@ interface CheckOptions {
   resolver?: string; // recursive resolver IP, default "1.1.1.1"
   bodyHashLimit?: number; // cap response body bytes read for hashing/similarity, default 1 MiB
   trustAnchors?: readonly RootTrustAnchorRef[]; // override IANA roots (testing)
+  canonicalUrl?: string; // URL every redirect chain must end at; default: the most common final URL
 }
 ```
 
@@ -107,6 +112,60 @@ A custom `TlsTransport.handshake()` result must be `Disposable`: the checks hold
 | dnssec      | Walk root → … → apex with the DO bit set, verify every RRSIG locally with `node:crypto`.                                                                                                      |
 | caa         | Tree-walk CAA per RFC 8659, fetch the leaf cert, match issuer against the CAA tag.                                                                                                            |
 | dane        | Query TLSA at `_443._tcp.<host>`, verify with DNSSEC, match against the served cert.                                                                                                          |
+| redirects   | Resolve A + AAAA for apex and `www`, then for each family GET the four entry points (HTTP on port 80, HTTPS on 443) and follow every redirect by hand, also across hosts.                     |
+
+### Redirects
+
+The redirect check derives the apex and the `www` name from the hostname
+(`example.com` and `www.example.com`, whichever one you pass) and requests
+the four entry points:
+
+- `http://example.com/`
+- `http://www.example.com/`
+- `https://example.com/`
+- `https://www.example.com/`
+
+It follows each chain one response at a time, up to 9 redirects, and records
+every hop (`url`, `address`, `status`, `location`). It does this separately
+over IPv4 and IPv6, because the two can be served by different machines. A
+family where neither name has an address is marked `available: false` and
+skipped; reporting that is the ip check's job.
+
+The canonical URL is the `canonicalUrl` option, or else the final URL most
+chains end at (ties go to HTTPS). For a site whose canonical URL is
+`https://www.example.com/`, three of the four entry points redirect and only
+`https://www.example.com/` answers 200.
+
+**Errors** (`ok` is `false`):
+
+- a chain ends anywhere other than the canonical URL, for example both
+  `https://example.com/` and `https://www.example.com/` serve the page
+- a chain ends in a non-2xx status, loops, takes more than 9 redirects, or a
+  request fails
+- a temporary redirect (302, 303, 307) to another scheme or host, where a
+  permanent one (301, 308) belongs
+- a redirect from HTTPS back to HTTP
+- a redirect without a usable `Location` header
+- a name without an address in a family the other name has
+- a canonical URL that is not HTTPS
+
+**Warnings** (`ok` is unaffected):
+
+- a temporary redirect that keeps the scheme and host and only changes the
+  path, such as `https://www.example.com/` → 302 → `/en/`. That is usually a
+  language redirect, which is temporary on purpose.
+- an `http://` entry point whose first redirect is not to `https://` on the
+  same host, such as `http://example.com/` → `https://www.example.com/`.
+  Browsers then never see the HSTS header for `example.com`, and HSTS preload
+  requires that redirect.
+
+Each error and warning names the URL it is about and is listed once, with the
+families that saw it, even when several chains pass the same redirect:
+
+- `[IPv4, IPv6] http://www.example.com/ redirects with a temporary 307; …`
+- `[IPv6] https://example.com/ ends at https://example.com/ instead of https://www.example.com/`
+
+Each chain's own `errors` and `warnings` still list everything for that chain.
 
 ### Sameness
 
