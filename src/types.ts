@@ -11,6 +11,11 @@ export interface CheckOptions {
   resolver?: string;
   bodyHashLimit?: number;
   trustAnchors?: readonly RootTrustAnchorRef[];
+  /**
+   * Scheme and host every redirect chain must end on, e.g. `https://www.example.com`; a full
+   * URL is reduced to its origin. Default: the origin most chains end on.
+   */
+  canonicalOrigin?: string;
 }
 
 export interface ResolvedOptions {
@@ -19,6 +24,7 @@ export interface ResolvedOptions {
   resolver: string;
   bodyHashLimit: number;
   trustAnchors?: readonly RootTrustAnchorRef[];
+  canonicalOrigin?: string;
 }
 
 export interface FamilyResult {
@@ -102,6 +108,47 @@ export interface DaneResult {
   matchedRecord?: TlsaRecord;
 }
 
+export interface RedirectHop {
+  url: string;
+  /** IP address the request was sent to. */
+  address: string;
+  status: number;
+  /** The `Location` header, as sent. */
+  location?: string;
+}
+
+export interface RedirectChain {
+  /** One of `http://apex/`, `http://www/`, `https://apex/`, `https://www/`. */
+  startUrl: string;
+  hops: RedirectHop[];
+  /** URL of the last response that was fetched. */
+  finalUrl?: string;
+  finalStatus?: number;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface RedirectFamilyResult {
+  /** False when neither the apex nor the www name has an address in this family. */
+  available: boolean;
+  chains: RedirectChain[];
+}
+
+export interface RedirectResult {
+  ok: boolean;
+  errors: string[];
+  warnings: string[];
+  apex: string;
+  www: string;
+  /**
+   * The origin every chain should end on, such as `https://www.example.com`: the
+   * `canonicalOrigin` option, else the origin most chains end on.
+   */
+  canonicalOrigin?: string;
+  ipv4: RedirectFamilyResult;
+  ipv6: RedirectFamilyResult;
+}
+
 export interface CheckResult {
   hostname: string;
   startedAt: string;
@@ -112,4 +159,5 @@ export interface CheckResult {
   dnssec: DnssecResult;
   caa: CaaResult;
   dane: DaneResult;
+  redirects: RedirectResult;
 }

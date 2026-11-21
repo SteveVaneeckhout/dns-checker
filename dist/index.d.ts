@@ -1,7 +1,7 @@
 import { type DnsTransport } from "./net/dns.js";
 import { type HttpTransport } from "./net/http.js";
 import { type TlsTransport } from "./net/tls.js";
-import type { CaaResult, CheckOptions, CheckResult, DaneResult, DnssecResult, IpResult, NameserverResult, SamenessResult } from "./types.js";
+import type { CaaResult, CheckOptions, CheckResult, DaneResult, DnssecResult, IpResult, NameserverResult, RedirectResult, SamenessResult } from "./types.js";
 export type * from "./types.js";
 export interface CheckTransports {
     dns?: DnsTransport;
@@ -14,4 +14,5 @@ export declare function checkSameness(host: string, options?: CheckOptions, tran
 export declare function checkDnssec(host: string, options?: CheckOptions, transports?: CheckTransports): Promise<DnssecResult>;
 export declare function checkCaa(host: string, options?: CheckOptions, transports?: CheckTransports): Promise<CaaResult>;
 export declare function checkDane(host: string, options?: CheckOptions, transports?: CheckTransports): Promise<DaneResult>;
+export declare function checkRedirects(host: string, options?: CheckOptions, transports?: CheckTransports): Promise<RedirectResult>;
 export declare function checkDomain(host: string, options?: CheckOptions, transports?: CheckTransports): Promise<CheckResult>;

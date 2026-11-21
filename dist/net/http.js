@@ -1,8 +1,9 @@
 import { Buffer } from "node:buffer";
 import { once } from "node:events";
+import net from "node:net";
 import { addAbortSignal } from "node:stream";
 import tls from "node:tls";
-const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+export const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 export function resolveRedirect(status, locationHeader, currentUrl, expectedHostname) {
     if (!REDIRECT_STATUSES.has(status))
         return null;
@@ -52,7 +53,8 @@ export function parseHttpResponse(buf, bodyLimit) {
     }
     else if (contentLengthStr) {
         const len = parseInt(contentLengthStr, 10);
-        if (rest.length < len)
+        // Incomplete only when fewer bytes arrived than we keep; reading stops after `bodyLimit`.
+        if (rest.length < Math.min(len, bodyLimit))
             return null;
         const cap = Math.min(len, bodyLimit);
         body = rest.subarray(0, cap);
@@ -98,21 +100,27 @@ function decodeChunked(buf, bodyLimit) {
     return null;
 }
 async function fetchOnce(opts) {
-    const port = opts.port ?? 443;
     const timeoutMs = opts.timeoutMs ?? 5000;
     const bodyLimit = opts.bodyLimit ?? 1024 * 1024;
     const url = URL.parse(opts.url);
     if (url === null)
         throw new Error(`invalid URL: ${opts.url}`);
+    if (url.protocol !== "https:" && url.protocol !== "http:") {
+        throw new Error(`unsupported URL scheme: ${url.protocol}`);
+    }
+    const secure = url.protocol === "https:";
+    const port = opts.port ?? (url.port ? Number(url.port) : secure ? 443 : 80);
     const path = `${url.pathname || "/"}${url.search}`;
     const signal = AbortSignal.timeout(timeoutMs);
-    const socket = tls.connect({
-        host: opts.address,
-        port,
-        servername: opts.servername,
-        rejectUnauthorized: false,
-        ALPNProtocols: ["http/1.1"],
-    });
+    const socket = secure
+        ? tls.connect({
+            host: opts.address,
+            port,
+            servername: opts.servername,
+            rejectUnauthorized: false,
+            ALPNProtocols: ["http/1.1"],
+        })
+        : net.connect({ host: opts.address, port });
     // On timeout the socket is destroyed with an AbortError, which ends the awaits below.
     addAbortSignal(signal, socket);
     const chunks = [];
@@ -120,7 +128,7 @@ async function fetchOnce(opts) {
     // Enough for the headers plus `bodyLimit` bytes of body; stop reading after that.
     const maxBuffer = bodyLimit + 65536;
     try {
-        await once(socket, "secureConnect");
+        await once(socket, secure ? "secureConnect" : "connect");
         socket.write(`GET ${path} HTTP/1.1\r\nHost: ${opts.servername}\r\nUser-Agent: dns-checker\r\nAccept: */*\r\nConnection: close\r\n\r\n`);
         for await (const chunk of socket) {
             chunks.push(chunk);

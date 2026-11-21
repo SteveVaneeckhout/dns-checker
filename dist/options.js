@@ -7,6 +7,13 @@ export function resolveOptions(hostname, opts) {
     };
     if (opts?.trustAnchors)
         base.trustAnchors = opts.trustAnchors;
+    if (opts?.canonicalOrigin !== undefined) {
+        const canonical = URL.parse(opts.canonicalOrigin);
+        if (canonical === null || (canonical.protocol !== "https:" && canonical.protocol !== "http:")) {
+            throw new Error(`invalid canonicalOrigin: ${opts.canonicalOrigin}`);
+        }
+        base.canonicalOrigin = canonical.origin;
+    }
     return base;
 }
 export function normalizeHostname(host) {

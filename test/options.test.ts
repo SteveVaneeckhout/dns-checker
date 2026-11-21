@@ -24,6 +24,25 @@ describe("resolveOptions", () => {
   });
 });
 
+describe("resolveOptions canonicalOrigin", () => {
+  it("is absent by default and normalized when given", () => {
+    expect(resolveOptions("example.com").canonicalOrigin).toBeUndefined();
+    expect(
+      resolveOptions("example.com", { canonicalOrigin: "HTTPS://WWW.Example.com/en/" })
+        .canonicalOrigin,
+    ).toBe("https://www.example.com");
+  });
+
+  it("throws on an invalid canonicalOrigin", () => {
+    expect(() => resolveOptions("example.com", { canonicalOrigin: "not a url" })).toThrow(
+      /invalid canonicalOrigin/,
+    );
+    expect(() => resolveOptions("example.com", { canonicalOrigin: "ftp://example.com" })).toThrow(
+      /invalid canonicalOrigin/,
+    );
+  });
+});
+
 describe("normalizeHostname", () => {
   it("lowercases, trims, strips trailing dot", () => {
     expect(normalizeHostname("  Example.COM.  ")).toBe("example.com");
