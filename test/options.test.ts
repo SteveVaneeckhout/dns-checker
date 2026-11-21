@@ -24,17 +24,21 @@ describe("resolveOptions", () => {
   });
 });
 
-describe("resolveOptions canonicalUrl", () => {
+describe("resolveOptions canonicalOrigin", () => {
   it("is absent by default and normalized when given", () => {
-    expect(resolveOptions("example.com").canonicalUrl).toBeUndefined();
+    expect(resolveOptions("example.com").canonicalOrigin).toBeUndefined();
     expect(
-      resolveOptions("example.com", { canonicalUrl: "HTTPS://WWW.Example.com" }).canonicalUrl,
-    ).toBe("https://www.example.com/");
+      resolveOptions("example.com", { canonicalOrigin: "HTTPS://WWW.Example.com/en/" })
+        .canonicalOrigin,
+    ).toBe("https://www.example.com");
   });
 
-  it("throws on an invalid canonicalUrl", () => {
-    expect(() => resolveOptions("example.com", { canonicalUrl: "not a url" })).toThrow(
-      /invalid canonicalUrl/,
+  it("throws on an invalid canonicalOrigin", () => {
+    expect(() => resolveOptions("example.com", { canonicalOrigin: "not a url" })).toThrow(
+      /invalid canonicalOrigin/,
+    );
+    expect(() => resolveOptions("example.com", { canonicalOrigin: "ftp://example.com" })).toThrow(
+      /invalid canonicalOrigin/,
     );
   });
 });

@@ -13,7 +13,7 @@ a website's hostname:
 7. Is there a TLSA record and does the DANE fingerprint match the served
    certificate?
 8. Do `http://` and `https://`, with and without `www`, all redirect correctly
-   to one canonical HTTPS URL?
+   to one canonical HTTPS origin?
 
 ESM only. Requires Node `>=26.13.0`.
 
@@ -79,7 +79,7 @@ interface CheckOptions {
   resolver?: string; // recursive resolver IP, default "1.1.1.1"
   bodyHashLimit?: number; // cap response body bytes read for hashing/similarity, default 1 MiB
   trustAnchors?: readonly RootTrustAnchorRef[]; // override IANA roots (testing)
-  canonicalUrl?: string; // URL every redirect chain must end at; default: the most common final URL
+  canonicalOrigin?: string; // scheme + host every redirect chain must end on; default: the most common one
 }
 ```
 
@@ -131,14 +131,20 @@ over IPv4 and IPv6, because the two can be served by different machines. A
 family where neither name has an address is marked `available: false` and
 skipped; reporting that is the ip check's job.
 
-The canonical URL is the `canonicalUrl` option, or else the final URL most
-chains end at (ties go to HTTPS). For a site whose canonical URL is
-`https://www.example.com/`, three of the four entry points redirect and only
-`https://www.example.com/` answers 200.
+The check judges scheme and host, not paths. The canonical origin is the
+`canonicalOrigin` option (a full URL is reduced to its origin), or else the
+origin most chains end on (ties go to HTTPS). For a site whose canonical origin
+is `https://www.example.com`, three of the four entry points redirect and only
+`https://www.example.com/` answers without moving to another origin.
+
+Redirects within one origin are the site's own business and are neither errors
+nor warnings, whatever their status: `https://www.example.com/` → 302 → `/en/`
+is a language redirect, not a broken setup. The page a chain finally ends on
+must still answer 2xx.
 
 **Errors** (`ok` is `false`):
 
-- a chain ends anywhere other than the canonical URL, for example both
+- a chain ends on another origin than the canonical one, for example both
   `https://example.com/` and `https://www.example.com/` serve the page
 - a chain ends in a non-2xx status, loops, takes more than 9 redirects, or a
   request fails
@@ -147,23 +153,18 @@ chains end at (ties go to HTTPS). For a site whose canonical URL is
 - a redirect from HTTPS back to HTTP
 - a redirect without a usable `Location` header
 - a name without an address in a family the other name has
-- a canonical URL that is not HTTPS
+- a canonical origin that is not HTTPS
 
-**Warnings** (`ok` is unaffected):
-
-- a temporary redirect that keeps the scheme and host and only changes the
-  path, such as `https://www.example.com/` → 302 → `/en/`. That is usually a
-  language redirect, which is temporary on purpose.
-- an `http://` entry point whose first redirect is not to `https://` on the
-  same host, such as `http://example.com/` → `https://www.example.com/`.
-  Browsers then never see the HSTS header for `example.com`, and HSTS preload
-  requires that redirect.
+**Warning** (`ok` is unaffected): an `http://` entry point whose first redirect
+is not to `https://` on the same host, such as `http://example.com/` →
+`https://www.example.com/`. Browsers then never see the HSTS header for
+`example.com`, and HSTS preload requires that redirect.
 
 Each error and warning names the URL it is about and is listed once, with the
 families that saw it, even when several chains pass the same redirect:
 
 - `[IPv4, IPv6] http://www.example.com/ redirects with a temporary 307; …`
-- `[IPv6] https://example.com/ ends at https://example.com/ instead of https://www.example.com/`
+- `[IPv6] https://example.com/ ends at https://example.com/, not on https://www.example.com`
 
 Each chain's own `errors` and `warnings` still list everything for that chain.
 

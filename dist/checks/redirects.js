@@ -96,21 +96,20 @@ async function followChain(startUrl, resolve, http, opts) {
         url = next.href;
     }
 }
-/** Adds the errors and warnings that depend on the redirects taken and the canonical URL. */
-function judgeChain(chain, canonicalUrl) {
+/**
+ * Adds the errors and warnings that depend on the redirects taken and the canonical origin.
+ * Only moves to another scheme or host are judged; a redirect within one origin, such as a
+ * language redirect from `/` to `/en/`, is the site's own business.
+ */
+function judgeChain(chain, canonicalOrigin) {
     const followed = chain.errors.length === 0;
     for (const [i, hop] of chain.hops.entries()) {
         const next = chain.hops[i + 1];
         if (next === undefined)
             break;
-        if (TEMPORARY_STATUSES.has(hop.status)) {
-            if (new URL(hop.url).origin === new URL(next.url).origin) {
-                // Same scheme and host, other path: typically a language or start-page redirect.
-                chain.warnings.push(`${hop.url} redirects to ${next.url} with a temporary ${hop.status}; fine for a language redirect, else use 301 or 308`);
-            }
-            else {
-                chain.errors.push(`${hop.url} redirects with a temporary ${hop.status}; use 301 or 308 for a permanent move`);
-            }
+        const sameOrigin = new URL(hop.url).origin === new URL(next.url).origin;
+        if (TEMPORARY_STATUSES.has(hop.status) && !sameOrigin) {
+            chain.errors.push(`${hop.url} redirects with a temporary ${hop.status}; use 301 or 308 for a permanent move`);
         }
         if (hop.url.startsWith("https:") && next.url.startsWith("http:")) {
             chain.errors.push(`${hop.url} redirects from HTTPS to HTTP (${next.url})`);
@@ -130,8 +129,10 @@ function judgeChain(chain, canonicalUrl) {
     if (!isSuccess(chain.finalStatus)) {
         chain.errors.push(`${chain.finalUrl} answers HTTP ${chain.finalStatus}`);
     }
-    else if (canonicalUrl !== undefined && chain.finalUrl !== canonicalUrl) {
-        chain.errors.push(`${chain.startUrl} ends at ${chain.finalUrl} instead of ${canonicalUrl}`);
+    else if (canonicalOrigin !== undefined &&
+        chain.finalUrl !== undefined &&
+        new URL(chain.finalUrl).origin !== canonicalOrigin) {
+        chain.errors.push(`${chain.startUrl} ends at ${chain.finalUrl}, not on ${canonicalOrigin}`);
     }
 }
 /** Distinct messages in first-seen order, each with the families that reported it. */
@@ -147,21 +148,22 @@ class MessageList {
         return [...this.#families].map(([message, families]) => `[${[...families].join(", ")}] ${message}`);
     }
 }
-/** The final URL most successful chains end at; ties prefer HTTPS, then the earlier chain. */
+/** The origin most successful chains end on; ties prefer HTTPS, then the earlier chain. */
 function pickCanonical(chains) {
     const counts = new Map();
     for (const chain of chains) {
         if (chain.errors.length > 0 || !isSuccess(chain.finalStatus) || chain.finalUrl === undefined) {
             continue;
         }
-        counts.set(chain.finalUrl, (counts.get(chain.finalUrl) ?? 0) + 1);
+        const origin = new URL(chain.finalUrl).origin;
+        counts.set(origin, (counts.get(origin) ?? 0) + 1);
     }
     let best;
     let bestScore = -1;
-    for (const [url, count] of counts) {
-        const score = count * 2 + (url.startsWith("https:") ? 1 : 0);
+    for (const [origin, count] of counts) {
+        const score = count * 2 + (origin.startsWith("https:") ? 1 : 0);
         if (score > bestScore) {
-            best = url;
+            best = origin;
             bestScore = score;
         }
     }
@@ -195,11 +197,11 @@ export async function runRedirectCheck(hostname, opts, dns, http) {
         errors.push(`no IPv4 or IPv6 address for ${apex} or ${www}`);
         return result;
     }
-    const canonicalUrl = opts.canonicalUrl ?? pickCanonical([...ipv4.chains, ...ipv6.chains]);
-    if (canonicalUrl !== undefined) {
-        result.canonicalUrl = canonicalUrl;
-        if (!canonicalUrl.startsWith("https:")) {
-            errors.push(`canonical URL ${canonicalUrl} is not HTTPS`);
+    const canonicalOrigin = opts.canonicalOrigin ?? pickCanonical([...ipv4.chains, ...ipv6.chains]);
+    if (canonicalOrigin !== undefined) {
+        result.canonicalOrigin = canonicalOrigin;
+        if (!canonicalOrigin.startsWith("https:")) {
+            errors.push(`canonical origin ${canonicalOrigin} is not HTTPS`);
         }
     }
     // Several chains often pass the same hop, and IPv4 and IPv6 usually behave alike, so the
@@ -212,7 +214,7 @@ export async function runRedirectCheck(hostname, opts, dns, http) {
         [ipv6, "IPv6"],
     ]) {
         for (const chain of family.chains) {
-            judgeChain(chain, canonicalUrl);
+            judgeChain(chain, canonicalOrigin);
             for (const e of chain.errors)
                 chainErrors.add(e, label);
             for (const w of chain.warnings)

@@ -12,10 +12,10 @@ export interface CheckOptions {
   bodyHashLimit?: number;
   trustAnchors?: readonly RootTrustAnchorRef[];
   /**
-   * URL every redirect chain must end at, e.g. `https://www.example.com/`. Default: the URL
-   * most chains end at.
+   * Scheme and host every redirect chain must end on, e.g. `https://www.example.com`; a full
+   * URL is reduced to its origin. Default: the origin most chains end on.
    */
-  canonicalUrl?: string;
+  canonicalOrigin?: string;
 }
 
 export interface ResolvedOptions {
@@ -24,7 +24,7 @@ export interface ResolvedOptions {
   resolver: string;
   bodyHashLimit: number;
   trustAnchors?: readonly RootTrustAnchorRef[];
-  canonicalUrl?: string;
+  canonicalOrigin?: string;
 }
 
 export interface FamilyResult {
@@ -140,8 +140,11 @@ export interface RedirectResult {
   warnings: string[];
   apex: string;
   www: string;
-  /** The URL every chain should end at: `canonicalUrl` option, else the most common final URL. */
-  canonicalUrl?: string;
+  /**
+   * The origin every chain should end on, such as `https://www.example.com`: the
+   * `canonicalOrigin` option, else the origin most chains end on.
+   */
+  canonicalOrigin?: string;
   ipv4: RedirectFamilyResult;
   ipv6: RedirectFamilyResult;
 }

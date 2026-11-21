@@ -14,7 +14,7 @@ interface Page {
 }
 type Site = Record<string, Page>;
 
-/** A healthy site whose canonical URL is https://www.host.test/. */
+/** A healthy site whose canonical origin is https://www.host.test. */
 const WWW_SITE: Site = {
   "http://host.test/": { status: 301, location: "https://host.test/" },
   "http://www.host.test/": { status: 301, location: "https://www.host.test/" },
@@ -84,7 +84,7 @@ describe("runRedirectCheck", () => {
     expect(r.ok).toBe(true);
     expect(r.apex).toBe("host.test");
     expect(r.www).toBe("www.host.test");
-    expect(r.canonicalUrl).toBe("https://www.host.test/");
+    expect(r.canonicalOrigin).toBe("https://www.host.test");
     expect(r.ipv6).toEqual({ available: false, chains: [] });
     const chains = r.ipv4.chains;
     expect(chains.map((c) => c.finalUrl)).toEqual(Array(4).fill("https://www.host.test/"));
@@ -103,7 +103,7 @@ describe("runRedirectCheck", () => {
     });
   });
 
-  it("passes a site whose canonical URL is the apex", async () => {
+  it("passes a site whose canonical origin is the apex", async () => {
     const { dns, http } = fakeWeb({
       "http://host.test/": { status: 308, location: "https://host.test/" },
       "http://www.host.test/": { status: 301, location: "https://www.host.test/" },
@@ -113,7 +113,7 @@ describe("runRedirectCheck", () => {
     const r = await runRedirectCheck("host.test", opts, dns, http);
     expect(r.errors).toEqual([]);
     expect(r.ok).toBe(true);
-    expect(r.canonicalUrl).toBe("https://host.test/");
+    expect(r.canonicalOrigin).toBe("https://host.test");
   });
 
   it("accepts the www name as input", async () => {
@@ -138,7 +138,7 @@ describe("runRedirectCheck", () => {
     });
     const r = await runRedirectCheck("host.test", opts, dns, http);
     expect(r.ok).toBe(true);
-    expect(r.canonicalUrl).toBe("https://www.host.test/en/");
+    expect(r.canonicalOrigin).toBe("https://www.host.test");
   });
 
   it("warns when http://apex skips https://apex (HSTS preload)", async () => {
@@ -169,7 +169,7 @@ describe("runRedirectCheck", () => {
     expect(r.ipv4.chains.map((c) => c.errors.length)).toEqual([1, 0, 1, 0]);
   });
 
-  it("only warns about a temporary redirect to another path on the same host", async () => {
+  it("leaves a temporary redirect within the canonical origin alone (language redirect)", async () => {
     const { dns, http } = fakeWeb({
       ...WWW_SITE,
       "https://www.host.test/": { status: 302, location: "/en/" },
@@ -177,13 +177,34 @@ describe("runRedirectCheck", () => {
     });
     const r = await runRedirectCheck("host.test", opts, dns, http);
     expect(r.errors).toEqual([]);
+    expect(r.warnings).toEqual([]);
     expect(r.ok).toBe(true);
-    expect(r.canonicalUrl).toBe("https://www.host.test/en/");
-    // All four chains pass the same 302; the warning is listed once, each chain keeps its own.
-    expect(r.warnings).toEqual([
-      "[IPv4] https://www.host.test/ redirects to https://www.host.test/en/ with a temporary 302; fine for a language redirect, else use 301 or 308",
-    ]);
-    expect(r.ipv4.chains.map((c) => c.warnings.length)).toEqual([1, 1, 1, 1]);
+    expect(r.canonicalOrigin).toBe("https://www.host.test");
+    expect(r.ipv4.chains.map((c) => c.finalUrl)).toEqual(
+      Array(4).fill("https://www.host.test/en/"),
+    );
+  });
+
+  it("still fails a language redirect that ends in an error status", async () => {
+    const { dns, http } = fakeWeb({
+      ...WWW_SITE,
+      "https://www.host.test/": { status: 302, location: "/en/" },
+    });
+    const r = await runRedirectCheck("host.test", opts, dns, http);
+    expect(r.ok).toBe(false);
+    expect(r.errors).toEqual(["[IPv4] https://www.host.test/en/ answers HTTP 404"]);
+  });
+
+  it("judges the move to another host, not a same-host 302 before it", async () => {
+    const { dns, http } = fakeWeb({
+      ...WWW_SITE,
+      "https://host.test/": { status: 302, location: "/en/" },
+      "https://host.test/en/": { status: 301, location: "https://www.host.test/en/" },
+      "https://www.host.test/en/": { status: 200 },
+    });
+    const r = await runRedirectCheck("host.test", opts, dns, http);
+    expect(r.errors).toEqual([]);
+    expect(r.ok).toBe(true);
   });
 
   it("lists a warning seen over IPv4 and IPv6 once, with both families", async () => {
@@ -217,19 +238,22 @@ describe("runRedirectCheck", () => {
     });
     const r = await runRedirectCheck("host.test", opts, dns, http);
     expect(r.ok).toBe(false);
-    expect(r.canonicalUrl).toBe("https://host.test/");
-    expect(r.errors.filter((e) => /instead of https:\/\/host\.test\//.test(e))).toHaveLength(2);
+    expect(r.canonicalOrigin).toBe("https://host.test");
+    expect(r.errors).toEqual([
+      "[IPv4] http://www.host.test/ ends at https://www.host.test/, not on https://host.test",
+      "[IPv4] https://www.host.test/ ends at https://www.host.test/, not on https://host.test",
+    ]);
   });
 
-  it("checks against the canonicalUrl option", async () => {
+  it("checks against the canonicalOrigin option", async () => {
     const { dns, http } = fakeWeb(WWW_SITE);
     const r = await runRedirectCheck(
       "host.test",
-      resolveOptions("host.test", { canonicalUrl: "https://HOST.test" }),
+      resolveOptions("host.test", { canonicalOrigin: "https://HOST.test/any/path" }),
       dns,
       http,
     );
-    expect(r.canonicalUrl).toBe("https://host.test/");
+    expect(r.canonicalOrigin).toBe("https://host.test");
     expect(r.ok).toBe(false);
     expect(r.errors).toHaveLength(4);
   });
@@ -250,7 +274,7 @@ describe("runRedirectCheck", () => {
     });
     const r = await runRedirectCheck("host.test", opts, dns, http);
     expect(r.ok).toBe(false);
-    expect(r.canonicalUrl).toBeUndefined();
+    expect(r.canonicalOrigin).toBeUndefined();
     expect(r.errors).toContain(
       "[IPv4] https://www.host.test/ loops: https://www.host.test/ was already requested",
     );
@@ -291,7 +315,7 @@ describe("runRedirectCheck", () => {
     });
     const r = await runRedirectCheck("host.test", opts, dns, http);
     expect(r.ok).toBe(false);
-    expect(r.canonicalUrl).toBeUndefined();
+    expect(r.canonicalOrigin).toBeUndefined();
     // All four chains end at the same 503; it is listed once.
     expect(r.errors).toEqual(["[IPv4] https://www.host.test/ answers HTTP 503"]);
   });
@@ -329,11 +353,11 @@ describe("runRedirectCheck", () => {
     });
     const r = await runRedirectCheck("host.test", opts, dns, http);
     expect(r.ipv6.available).toBe(true);
-    expect(r.canonicalUrl).toBe("https://www.host.test/");
+    expect(r.canonicalOrigin).toBe("https://www.host.test");
     expect(r.ok).toBe(false);
     expect(r.errors).toEqual([
-      "[IPv6] http://host.test/ ends at https://host.test/ instead of https://www.host.test/",
-      "[IPv6] https://host.test/ ends at https://host.test/ instead of https://www.host.test/",
+      "[IPv6] http://host.test/ ends at https://host.test/, not on https://www.host.test",
+      "[IPv6] https://host.test/ ends at https://host.test/, not on https://www.host.test",
     ]);
   });
 
@@ -360,7 +384,7 @@ describe("runRedirectCheck", () => {
     expect(r.errors.at(-1)).toBe("no IPv4 or IPv6 address for host.test or www.host.test");
   });
 
-  it("fails a canonical URL that is not HTTPS", async () => {
+  it("fails a canonical origin that is not HTTPS", async () => {
     const { dns, http } = fakeWeb({
       "http://host.test/": { status: 301, location: "http://www.host.test/" },
       "http://www.host.test/": { status: 200 },
@@ -368,7 +392,7 @@ describe("runRedirectCheck", () => {
       "https://www.host.test/": { status: 301, location: "http://www.host.test/" },
     });
     const r = await runRedirectCheck("host.test", opts, dns, http);
-    expect(r.canonicalUrl).toBe("http://www.host.test/");
-    expect(r.errors).toContain("canonical URL http://www.host.test/ is not HTTPS");
+    expect(r.canonicalOrigin).toBe("http://www.host.test");
+    expect(r.errors).toContain("canonical origin http://www.host.test is not HTTPS");
   });
 });
